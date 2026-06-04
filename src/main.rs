@@ -10,18 +10,30 @@ const MAGENTA: &str = "\x1b[38;2;198;120;221m";
 const LIGHT_GRAY: &str = "\x1b[38;2;120;120;120m";
 const RESET: &str = "\x1b[0m";
 const BG_GREY: &str = "\x1b[48;2;40;44;52m";
+const BG_BLUE: &str = "\x1b[48;2;15;23;42m";
 const CLEAR_LINE: &str = "\x1b[K";
 
 fn main() -> io::Result<()> {
     let stdin = io::stdin();
+    let re_change = Regex::new(
+        //r"^\x1b\[1m\x1b\[38;5;2m..* +.*[a-z]{8,}.* +.*[0-9a-z]{8,}\x1b\[39m\x1b\[0m")
+        r"^(\x1b\[1m\x1b\[38;)?.*[@◆○].*\s+.*((\x1b\[38;5;\dm)?[a-z](\x1b\[0m)?){8,}.*\s+.*((\x1b\[38;5;\dm)?[0-9a-z](\x1b\[0m)?){8,}.*$",
+    )
+    .unwrap();
+
     let re_diff_file = Regex::new(
         r"\x1b\[38;5;3m(Removed|Added|Modified) (((regular|executable) file)|symlink) (.+?( \((.+) => (.+)\))?):\x1b\[39m",
     )
     .unwrap();
+
     let re_exec_file = Regex::new(
         r"\x1b\[38;5;3m(Non-e|E)xecutable file became (non-)?executable at (.+?):\x1b\[39m",
     )
     .unwrap();
+
+    let re_conflict_file =
+        Regex::new(r"\x1b\[38;5;3m(Created conflict in) (.+?):\x1b\[39m").unwrap();
+
     let re_status_file = Regex::new(r"\x1b\[38;5;6mR \{(.+) => (.+)\}\x1b\[39m").unwrap();
 
     let args: Vec<String> = env::args().collect();
@@ -43,7 +55,10 @@ fn main() -> io::Result<()> {
     };
 
     for line in stdin.lock().lines().map_while(Result::ok) {
-        if let Some(captures) = re_diff_file.captures(&line)
+        if let Some(_captures) = re_change.captures(&line) {
+            let bg_line = line.replace(RESET, &format!("\x1b[0m{BG_BLUE}"));
+            writeln!(fd, "{BG_BLUE}{bg_line}{CLEAR_LINE}{RESET}")?;
+        } else if let Some(captures) = re_diff_file.captures(&line)
             && let action = captures.get(1).map_or("", |m| m.as_str())
         {
             match action {
@@ -78,6 +93,9 @@ fn main() -> io::Result<()> {
                 "x"
             };
             writeln!(fd, "{BG_GREY}{BLUE}{x} {path}{CLEAR_LINE}{RESET}")?;
+        } else if let Some(captures) = re_conflict_file.captures(&line) {
+            let path = captures.get(2).map_or("", |m| m.as_str());
+            writeln!(fd, "{BG_GREY}{RED}C {path}{CLEAR_LINE}{RESET}")?;
         } else if let Some(captures) = re_status_file.captures(&line) {
             let old_path = captures.get(1).map_or("", |m| m.as_str());
             let new_path = captures.get(2).map_or("", |m| m.as_str());
