@@ -3,6 +3,16 @@ use std::env;
 use std::io::{self, BufRead, Write};
 use std::process::{Command, Stdio};
 
+#[cfg(windows)]
+fn normalize_path(path: &str) -> String {
+    path.replace('\\', "/")
+}
+
+#[cfg(not(windows))]
+fn normalize_path(path: &str) -> &str {
+    path
+}
+
 const RED: &str = "\x1b[38;2;224;108;117m";
 const GREEN: &str = "\x1b[38;2;152;195;121m";
 const BLUE: &str = "\x1b[38;2;97;175;239m";
@@ -34,7 +44,8 @@ fn main() -> io::Result<()> {
     let re_conflict_file =
         Regex::new(r"\x1b\[38;5;3m(Created conflict in) (.+?):\x1b\[39m").unwrap();
 
-    let re_status_file = Regex::new(r"\x1b\[38;5;6mR \{(.+) => (.+)\}\x1b\[39m").unwrap();
+    let re_status_rename_file = Regex::new(r"\x1b\[38;5;6mR \{(.+) => (.+)\}\x1b\[39m").unwrap();
+    let re_status_file = Regex::new(r"\x1b\[38;5;\dm([A-Z?]) (.+)\x1b\[39m").unwrap();
 
     let args: Vec<String> = env::args().collect();
 
@@ -55,26 +66,36 @@ fn main() -> io::Result<()> {
     };
 
     for line in stdin.lock().lines().map_while(Result::ok) {
-        if let Some(_captures) = re_change.captures(&line) {
+        if let Some(captures) = re_status_file.captures(&line) {
+            let status = captures.get(1).map_or("", |m| m.as_str());
+            let path = normalize_path(captures.get(2).map_or("", |m| m.as_str()));
+
+            match status {
+                "A" => writeln!(fd, "{GREEN}A {path}{CLEAR_LINE}{RESET}")?,
+                "M" => writeln!(fd, "{BLUE}M {path}{CLEAR_LINE}{RESET}")?,
+                "D" => writeln!(fd, "{RED}D {path}{CLEAR_LINE}{RESET}")?,
+                "R" => writeln!(fd, "{MAGENTA}R {path}{CLEAR_LINE}{RESET}")?,
+                "C" => writeln!(fd, "{RED}C {path}{CLEAR_LINE}{RESET}")?,
+                _ => writeln!(fd, "{}", line)?,
+            }
+        } else if let Some(_captures) = re_change.captures(&line) {
             let bg_line = line.replace(RESET, &format!("\x1b[0m{BG_BLUE}"));
             writeln!(fd, "{BG_BLUE}{bg_line}{CLEAR_LINE}{RESET}")?;
         } else if let Some(captures) = re_diff_file.captures(&line)
-            && let action = captures.get(1).map_or("", |m| m.as_str())
+            && let status = captures.get(1).map_or("", |m| m.as_str())
         {
-            match action {
+            let path = normalize_path(captures.get(5).map_or("", |m| m.as_str()));
+            match status {
                 "Removed" => {
-                    let path = captures.get(5).map_or("", |m| m.as_str());
                     writeln!(fd, "{BG_GREY}{RED}D {path}{CLEAR_LINE}{RESET}")?;
                 }
                 "Added" => {
-                    let path = captures.get(5).map_or("", |m| m.as_str());
                     writeln!(fd, "{BG_GREY}{GREEN}A {path}{CLEAR_LINE}{RESET}")?;
                 }
                 "Modified" => {
-                    let path = captures.get(5).map_or("", |m| m.as_str());
                     if path.contains("=>") {
-                        let new_path = captures.get(7).map_or("", |m| m.as_str());
-                        let old_path = captures.get(8).map_or("", |m| m.as_str());
+                        let new_path = normalize_path(captures.get(7).map_or("", |m| m.as_str()));
+                        let old_path = normalize_path(captures.get(8).map_or("", |m| m.as_str()));
                         writeln!(
                             fd,
                             "{BG_GREY}{MAGENTA}R {new_path} {LIGHT_GRAY}<= {old_path}{CLEAR_LINE}{RESET}"
@@ -86,7 +107,7 @@ fn main() -> io::Result<()> {
                 _ => writeln!(fd, "{}", line)?,
             }
         } else if let Some(captures) = re_exec_file.captures(&line) {
-            let path = captures.get(3).map_or("", |m| m.as_str());
+            let path = normalize_path(captures.get(3).map_or("", |m| m.as_str()));
             let x = if line.contains("became executable") {
                 "X"
             } else {
@@ -94,11 +115,11 @@ fn main() -> io::Result<()> {
             };
             writeln!(fd, "{BG_GREY}{BLUE}{x} {path}{CLEAR_LINE}{RESET}")?;
         } else if let Some(captures) = re_conflict_file.captures(&line) {
-            let path = captures.get(2).map_or("", |m| m.as_str());
+            let path = normalize_path(captures.get(2).map_or("", |m| m.as_str()));
             writeln!(fd, "{BG_GREY}{RED}C {path}{CLEAR_LINE}{RESET}")?;
-        } else if let Some(captures) = re_status_file.captures(&line) {
-            let old_path = captures.get(1).map_or("", |m| m.as_str());
-            let new_path = captures.get(2).map_or("", |m| m.as_str());
+        } else if let Some(captures) = re_status_rename_file.captures(&line) {
+            let old_path = normalize_path(captures.get(1).map_or("", |m| m.as_str()));
+            let new_path = normalize_path(captures.get(2).map_or("", |m| m.as_str()));
             writeln!(
                 fd,
                 "{MAGENTA}R {new_path} {LIGHT_GRAY}<= {old_path}{CLEAR_LINE}{RESET}"
