@@ -13,14 +13,26 @@ fn normalize_path(path: &str) -> &str {
     path
 }
 
-const RED: &str = "\x1b[38;2;224;108;117m";
-const GREEN: &str = "\x1b[38;2;152;195;121m";
-const BLUE: &str = "\x1b[38;2;97;175;239m";
-const MAGENTA: &str = "\x1b[38;2;198;120;221m";
+const RED: &str = "\x1b[31m";
+const GREEN: &str = "\x1b[32m";
+const BLUE: &str = "\x1b[34m";
+const MAGENTA: &str = "\x1b[35m";
+
+// [48;2; means background color, [38;2; means foreground color
+// remaining values are RGB values
+
+// const RED: &str = "\x1b[38;2;224;108;117m";
+// const GREEN: &str = "\x1b[38;2;152;195;121m";
+// const BLUE: &str = "\x1b[38;2;97;175;239m";
+// const MAGENTA: &str = "\x1b[38;2;198;120;221m";
+
 const LIGHT_GRAY: &str = "\x1b[38;2;120;120;120m";
-const RESET: &str = "\x1b[0m";
 const BG_GREY: &str = "\x1b[48;2;40;44;52m";
-const BG_BLUE: &str = "\x1b[48;2;15;23;42m";
+const BG_BLUE: &str = "\x1b[48;2;30;34;52m";
+
+const RESET: &str = "\x1b[0m";
+
+// make background to go to end of line
 const CLEAR_LINE: &str = "\x1b[K";
 
 fn main() -> io::Result<()> {
@@ -44,8 +56,8 @@ fn main() -> io::Result<()> {
     let re_conflict_file =
         Regex::new(r"\x1b\[38;5;3m(Created conflict in) (.+?):\x1b\[39m").unwrap();
 
-    let re_status_rename_file = Regex::new(r"\x1b\[38;5;6mR \{(.+) => (.+)\}\x1b\[39m").unwrap();
-    let re_status_file = Regex::new(r"\x1b\[38;5;\dm([A-Z?]) (.+)\x1b\[39m").unwrap();
+    let re_status_file =
+        Regex::new(r"\x1b\[38;5;\dm([A-Z?]) (\{(?:(.+) => (.+)\})|.+?)\x1b\[39m").unwrap();
 
     let args: Vec<String> = env::args().collect();
 
@@ -74,7 +86,18 @@ fn main() -> io::Result<()> {
                 "A" => writeln!(fd, "{GREEN}A {path}{CLEAR_LINE}{RESET}")?,
                 "M" => writeln!(fd, "{BLUE}M {path}{CLEAR_LINE}{RESET}")?,
                 "D" => writeln!(fd, "{RED}D {path}{CLEAR_LINE}{RESET}")?,
-                "R" => writeln!(fd, "{MAGENTA}R {path}{CLEAR_LINE}{RESET}")?,
+                "R" => {
+                    if path.contains("=>") {
+                        let old_path = normalize_path(captures.get(3).map_or("", |m| m.as_str()));
+                        let new_path = normalize_path(captures.get(4).map_or("", |m| m.as_str()));
+                        writeln!(
+                            fd,
+                            "{MAGENTA}R {new_path} {LIGHT_GRAY}<= {old_path}{CLEAR_LINE}{RESET}"
+                        )?;
+                    } else {
+                        writeln!(fd, "{BG_GREY}{BLUE}M {path}{CLEAR_LINE}{RESET}")?;
+                    }
+                }
                 "C" => writeln!(fd, "{RED}C {path}{CLEAR_LINE}{RESET}")?,
                 _ => writeln!(fd, "{}", line)?,
             }
@@ -117,13 +140,6 @@ fn main() -> io::Result<()> {
         } else if let Some(captures) = re_conflict_file.captures(&line) {
             let path = normalize_path(captures.get(2).map_or("", |m| m.as_str()));
             writeln!(fd, "{BG_GREY}{RED}C {path}{CLEAR_LINE}{RESET}")?;
-        } else if let Some(captures) = re_status_rename_file.captures(&line) {
-            let old_path = normalize_path(captures.get(1).map_or("", |m| m.as_str()));
-            let new_path = normalize_path(captures.get(2).map_or("", |m| m.as_str()));
-            writeln!(
-                fd,
-                "{MAGENTA}R {new_path} {LIGHT_GRAY}<= {old_path}{CLEAR_LINE}{RESET}"
-            )?;
         } else {
             writeln!(fd, "{}", line)?;
         }
