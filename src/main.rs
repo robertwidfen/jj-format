@@ -14,6 +14,7 @@ fn normalize_path(path: &str) -> &str {
 }
 
 const RED: &str = "\x1b[31m";
+const YELLOW: &str = "\x1b[33m";
 const GREEN: &str = "\x1b[32m";
 const BLUE: &str = "\x1b[34m";
 const MAGENTA: &str = "\x1b[35m";
@@ -28,7 +29,7 @@ const MAGENTA: &str = "\x1b[35m";
 
 const LIGHT_GRAY: &str = "\x1b[38;2;120;120;120m";
 const BG_GREY: &str = "\x1b[48;2;40;44;52m";
-const BG_BLUE: &str = "\x1b[48;2;30;34;52m";
+const BG_BLUE: &str = "\x1b[48;2;30;44;52m";
 
 const RESET: &str = "\x1b[0m";
 
@@ -37,11 +38,8 @@ const CLEAR_LINE: &str = "\x1b[K";
 
 fn main() -> io::Result<()> {
     let stdin = io::stdin();
-    let re_change = Regex::new(
-        //r"^\x1b\[1m\x1b\[38;5;2m..* +.*[a-z]{8,}.* +.*[0-9a-z]{8,}\x1b\[39m\x1b\[0m")
-        r"^(\x1b\[1m\x1b\[38;)?.*[@◆○].*\s+.*((\x1b\[38;5;\dm)?[a-z](\x1b\[0m)?){8,}.*\s+.*((\x1b\[38;5;\dm)?[0-9a-z](\x1b\[0m)?){8,}.*$",
-    )
-    .unwrap();
+    let re_change = Regex::new(r"^(│ )*(\x1b\[1m\x1b\[38;\d+;\d+m)?[@◆○]").unwrap();
+    let re_summary = Regex::new(r"^.*\x1b\[0m\s*([^\x1b]+).*").unwrap();
 
     let re_diff_file = Regex::new(
         r"\x1b\[38;5;3m(Removed|Added|Modified) (((regular|executable) file)|symlink) (.+?( \((.+) => (.+)\))?):\x1b\[39m",
@@ -102,7 +100,19 @@ fn main() -> io::Result<()> {
                 _ => writeln!(fd, "{}", line)?,
             }
         } else if let Some(_captures) = re_change.captures(&line) {
-            let bg_line = line.replace(RESET, &format!("\x1b[0m{BG_BLUE}"));
+            let mut bg_line = line.replace(RESET, &format!("\x1b[0m{BG_BLUE}"));
+            if let Some(captures) = re_summary.captures(&line) {
+                let summary = captures.get(1).map_or("", |m| m.as_str());
+                let mut new_summary = summary.to_string();
+                if let Some((i72, _)) = summary.char_indices().nth(72) {
+                    new_summary.insert_str(i72, RED);
+                }
+                if let Some((i50, _)) = summary.char_indices().nth(50) {
+                    new_summary.insert_str(i50, YELLOW);
+                }
+                bg_line = bg_line.replace(summary, &new_summary);
+            }
+
             writeln!(fd, "{BG_BLUE}{bg_line}{CLEAR_LINE}{RESET}")?;
         } else if let Some(captures) = re_diff_file.captures(&line)
             && let status = captures.get(1).map_or("", |m| m.as_str())
