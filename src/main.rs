@@ -1,5 +1,5 @@
+use clap::Parser;
 use regex::Regex;
-use std::env;
 use std::io::{self, BufRead, Write};
 use std::process::{Command, Stdio};
 
@@ -32,11 +32,28 @@ const BG_GREY: &str = "\x1b[48;2;40;44;52m";
 const BG_BLUE: &str = "\x1b[48;2;30;44;52m";
 
 const RESET: &str = "\x1b[0m";
-
 // make background to go to end of line
 const CLEAR_LINE: &str = "\x1b[K";
 
+#[derive(Parser, Debug)]
+#[command(version, about)]
+struct Args {
+    /// Summary warning length
+    #[arg(short = 'w', long, default_value_t = 50)]
+    summary_warning_len: usize,
+
+    /// Summary error length
+    #[arg(short = 'e', long, default_value_t = 72)]
+    summary_error_len: usize,
+
+    /// Optional pager command and its arguments
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    pager: Vec<String>,
+}
+
 fn main() -> io::Result<()> {
+    let args = Args::parse();
+
     let stdin = io::stdin();
     let re_change = Regex::new(r"^(│ )*(\x1b\[1m\x1b\[38;\d+;\d+m)?[@◆○]").unwrap();
     let re_summary = Regex::new(r"^.*\x1b\[0m\s*([^\x1b]+).*").unwrap();
@@ -57,16 +74,14 @@ fn main() -> io::Result<()> {
     let re_status_file =
         Regex::new(r"\x1b\[38;5;\dm([A-Z?]) (\{(?:(.+) => (.+)\})|.+?)\x1b\[39m").unwrap();
 
-    let args: Vec<String> = env::args().collect();
-
     let mut stdout = io::stdout();
     let mut child = None;
 
-    let fd: &mut dyn Write = if args.len() == 1 {
+    let fd: &mut dyn Write = if args.pager.is_empty() {
         &mut stdout
     } else {
-        let pager_program = &args[1];
-        let pager_flags = &args[2..];
+        let pager_program = &args.pager[0];
+        let pager_flags = &args.pager[1..];
         let cmd = Command::new(pager_program)
             .args(pager_flags)
             .stdin(Stdio::piped())
@@ -104,11 +119,13 @@ fn main() -> io::Result<()> {
             if let Some(captures) = re_summary.captures(&line) {
                 let summary = captures.get(1).map_or("", |m| m.as_str());
                 let mut new_summary = summary.to_string();
-                if let Some((i72, _)) = summary.char_indices().nth(72) {
-                    new_summary.insert_str(i72, RED);
+                if let Some((i_warning, _)) = summary.char_indices().nth(args.summary_error_len + 1)
+                {
+                    new_summary.insert_str(i_warning, RED);
                 }
-                if let Some((i50, _)) = summary.char_indices().nth(50) {
-                    new_summary.insert_str(i50, YELLOW);
+                if let Some((i_error, _)) = summary.char_indices().nth(args.summary_warning_len + 1)
+                {
+                    new_summary.insert_str(i_error, YELLOW);
                 }
                 bg_line = bg_line.replace(summary, &new_summary);
             }
