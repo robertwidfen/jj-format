@@ -1,4 +1,5 @@
 use clap::Parser;
+use crossterm::event::{Event, KeyCode, KeyModifiers};
 use regex::Regex;
 use std::io::{self, BufRead, Write};
 use std::process::{Command, Stdio};
@@ -51,6 +52,57 @@ struct Args {
     pager: Vec<String>,
 }
 
+fn page_prompt(upper_mark: usize, rows: usize, line_count: usize) -> String {
+    // the last terminal row is used by the prompt
+    let page_rows = rows.saturating_sub(1).max(1);
+    let max_mark = line_count.saturating_sub(page_rows);
+    let total = line_count.div_ceil(page_rows).max(1);
+    let page = if upper_mark >= max_mark {
+        total
+    } else {
+        upper_mark / page_rows + 1
+    };
+    format!("{page}/{total}  q: quit  /: search  M: help")
+}
+
+/// Wraps the default key bindings of minus and updates the page indicator in the prompt
+struct PageIndicator {
+    inner: minus::input::HashedEventRegister<std::hash::RandomState>,
+    pager: minus::Pager,
+}
+
+impl minus::input::InputClassifier for PageIndicator {
+    fn classify_input(
+        &self,
+        ev: Event,
+        ps: &minus::PagerState,
+    ) -> Option<minus::input::InputEvent> {
+        // on layouts like German "/" and "?" need shift, but minus binds them without modifiers
+        let ev = match ev {
+            Event::Key(mut key) if matches!(key.code, KeyCode::Char(c) if !c.is_alphabetic()) => {
+                key.modifiers.remove(KeyModifiers::SHIFT);
+                Event::Key(key)
+            }
+            ev => ev,
+        };
+        let event = self.inner.classify_input(ev, ps);
+        let upper_mark = match event {
+            Some(minus::input::InputEvent::UpdateUpperMark(m)) => m,
+            _ => ps.upper_mark,
+        };
+        let _ = self.pager.set_prompt(page_prompt(
+            upper_mark,
+            ps.rows,
+            ps.screen.formatted_lines_count(),
+        ));
+        event
+    }
+
+    fn format_help(&self) -> Option<String> {
+        minus::input::InputClassifier::format_help(&self.inner)
+    }
+}
+
 fn main() -> io::Result<()> {
     let args = Args::parse();
 
@@ -74,11 +126,12 @@ fn main() -> io::Result<()> {
     let re_status_file =
         Regex::new(r"\x1b\[38;5;\dm([A-Z?]) (\{(?:(.+) => (.+)\})|.+?)\x1b\[39m").unwrap();
 
-    let mut stdout = io::stdout();
+    // without a pager argument, output is collected and shown with the internal "minus" pager
+    let mut buffer: Vec<u8> = Vec::new();
     let mut child = None;
 
     let fd: &mut dyn Write = if args.pager.is_empty() {
-        &mut stdout
+        &mut buffer
     } else {
         let pager_program = &args.pager[0];
         let pager_flags = &args.pager[1..];
@@ -175,6 +228,23 @@ fn main() -> io::Result<()> {
     if let Some(mut child_process) = child {
         drop(child_process.stdin.take());
         child_process.wait()?;
+    } else {
+        let text = String::from_utf8_lossy(&buffer);
+        let text = text.trim_end_matches('\n');
+        let pager = minus::Pager::new();
+        // assumes no wrapped lines, corrected on first key press
+        let rows = crossterm::terminal::size().map_or(25, |(_, r)| r as usize);
+        pager
+            .set_prompt(page_prompt(0, rows, text.lines().count()))
+            .map_err(io::Error::other)?;
+        pager
+            .set_input_classifier(Box::new(PageIndicator {
+                inner: minus::input::HashedEventRegister::default(),
+                pager: pager.clone(),
+            }))
+            .map_err(io::Error::other)?;
+        pager.push_str(text).map_err(io::Error::other)?;
+        minus::page_all(pager).map_err(io::Error::other)?;
     }
 
     Ok(())
