@@ -1,6 +1,8 @@
 use clap::Parser;
 use crossterm::event::{Event, KeyCode, KeyModifiers};
+use crossterm::{event::DisableMouseCapture, execute};
 use regex::Regex;
+use std::io::stdout;
 use std::io::{self, BufRead, Write};
 use std::process::{Command, Stdio};
 
@@ -46,6 +48,10 @@ struct Args {
     /// Summary error length
     #[arg(short = 'e', long, default_value_t = 72)]
     summary_error_len: usize,
+
+    /// Enable mouse support in minus pager
+    #[arg(short = 'm', long, default_value_t = false)]
+    mouse_support: bool,
 
     /// Optional pager command and its arguments
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -232,7 +238,15 @@ fn main() -> io::Result<()> {
         let text = String::from_utf8_lossy(&buffer);
         let text = text.trim_end_matches('\n');
         let pager = minus::Pager::new();
-        // assumes no wrapped lines, corrected on first key press
+
+        // disable mouse capture
+        if !args.mouse_support {
+            std::thread::spawn(|| {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                let _ = execute!(stdout(), DisableMouseCapture);
+            });
+        }
+
         let rows = crossterm::terminal::size().map_or(25, |(_, r)| r as usize);
         pager
             .set_prompt(page_prompt(0, rows, text.lines().count()))
