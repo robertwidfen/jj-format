@@ -147,7 +147,7 @@ fn main() -> io::Result<()> {
     let args = Args::parse();
 
     let stdin = io::stdin();
-    let re_change = Regex::new(r"^(│ )*(\x1b\[1m\x1b\[38;\d+;\d+m)?[@◆○]").unwrap();
+    let re_change = Regex::new(r"^(│ )*(\x1b\[1m\x1b\[38;\d+;\d+m)?[@◆○×]").unwrap();
     let re_summary = Regex::new(r"^.*\x1b\[0m\s*([^\x1b]+).*").unwrap();
 
     let re_diff_file = Regex::new(
