@@ -53,9 +53,40 @@ struct Args {
     #[arg(short = 'm', long, default_value_t = false)]
     mouse_support: bool,
 
+    /// Lines to print after quitting minus:
+    /// 0 to suppress output;
+    /// positive number from the start of the last visible page,
+    /// negative number from the end of the last visible page, may extend beyond the page;
+    /// `page` prints exactly the page;
+    /// `all` prints all lines.
+    #[arg(short = 'l', long, default_value = "0", allow_negative_numbers = true, value_parser = parse_last_lines)]
+    output_lines: OutputLines,
+
     /// Optional pager command and its arguments
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pager: Vec<String>,
+}
+
+/// Rows to print after quitting minus
+#[derive(Clone, Copy, Debug)]
+enum OutputLines {
+    /// All lines
+    All,
+    /// Exactly the last visible page
+    Page,
+    /// Positive: from the start of the page onwards, negative: up to the end of the page
+    Rows(isize),
+}
+
+fn parse_last_lines(s: &str) -> Result<OutputLines, String> {
+    match s {
+        "all" => Ok(OutputLines::All),
+        "page" => Ok(OutputLines::Page),
+        n => n
+            .parse()
+            .map(OutputLines::Rows)
+            .map_err(|e| format!("expected a number, `all` or `page`: {e}")),
+    }
 }
 
 fn page_prompt(upper_mark: usize, rows: usize, line_count: usize) -> String {
@@ -75,6 +106,8 @@ fn page_prompt(upper_mark: usize, rows: usize, line_count: usize) -> String {
 struct PageIndicator {
     inner: minus::input::HashedEventRegister<std::hash::RandomState>,
     pager: minus::Pager,
+    /// Last seen (upper_mark, rows, cols), used to reprint the visible page after quitting
+    view: std::sync::Arc<std::sync::Mutex<(usize, usize, usize)>>,
 }
 
 impl minus::input::InputClassifier for PageIndicator {
@@ -91,6 +124,7 @@ impl minus::input::InputClassifier for PageIndicator {
             }
             ev => ev,
         };
+        *self.view.lock().unwrap() = (ps.upper_mark, ps.rows, ps.cols);
         let event = self.inner.classify_input(ev, ps);
         let upper_mark = match event {
             Some(minus::input::InputEvent::UpdateUpperMark(m)) => m,
@@ -247,7 +281,9 @@ fn main() -> io::Result<()> {
             });
         }
 
-        let rows = crossterm::terminal::size().map_or(25, |(_, r)| r as usize);
+        let (cols, rows) =
+            crossterm::terminal::size().map_or((80, 25), |(c, r)| (c as usize, r as usize));
+        let view = std::sync::Arc::new(std::sync::Mutex::new((0, rows, cols)));
         pager
             .set_prompt(page_prompt(0, rows, text.lines().count()))
             .map_err(io::Error::other)?;
@@ -255,10 +291,57 @@ fn main() -> io::Result<()> {
             .set_input_classifier(Box::new(PageIndicator {
                 inner: minus::input::HashedEventRegister::default(),
                 pager: pager.clone(),
+                view: view.clone(),
             }))
+            .map_err(io::Error::other)?;
+        // by default minus calls process::exit on quit, which would skip reprinting the last page
+        pager
+            .remove_hook(minus::hooks::Hook::PostPagerExit, 1)
             .map_err(io::Error::other)?;
         pager.push_str(text).map_err(io::Error::other)?;
         minus::page_all(pager).map_err(io::Error::other)?;
+
+        // minus uses the alternate screen if there is more than one screen of content, so reprint the end of the
+        // last visible page after quitting; rows are wrapped the same way as minus does it, upper_mark counts wrapped rows
+        let (upper_mark, rows, cols) = *view.lock().unwrap();
+        let wrapped: Vec<_> = text
+            .lines()
+            .flat_map(|line| textwrap::wrap(line, cols))
+            .collect();
+
+        // if everything fits on one screen minus prints it directly without paging
+        if wrapped.len() <= rows {
+            return Ok(());
+        }
+
+        // alternate screen was used - determine the range of lines to print manually
+        let start = upper_mark.min(wrapped.len());
+        let end = (upper_mark + rows.saturating_sub(1)).min(wrapped.len());
+        let range = match args.output_lines {
+            OutputLines::All => 0..wrapped.len(),
+            OutputLines::Page => start..end,
+            OutputLines::Rows(n) if n < 0 => end.saturating_sub(n.unsigned_abs())..end,
+            OutputLines::Rows(n) => start..(start + n.unsigned_abs()).min(wrapped.len()),
+        };
+
+        // wrapping splits colored text, so carry the SGR state (colors etc.) over to each printed row
+        let re_sgr = Regex::new(r"\x1b\[([0-9;]*)m").unwrap();
+        let mut sgr = String::new();
+        let mut out = stdout().lock();
+        for (i, row) in wrapped[..range.end].iter().enumerate() {
+            if i >= range.start {
+                writeln!(out, "{sgr}{row}\x1b[0m")?;
+            }
+            for cap in re_sgr.captures_iter(row) {
+                let params = &cap[1];
+                if params.is_empty() || params == "0" || params.starts_with("0;") {
+                    sgr.clear();
+                }
+                if !params.is_empty() && params != "0" {
+                    sgr.push_str(&cap[0]);
+                }
+            }
+        }
     }
 
     Ok(())
