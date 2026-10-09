@@ -164,7 +164,7 @@ fn main() -> io::Result<()> {
         Regex::new(r"\x1b\[38;5;3m(Created conflict in) (.+?):\x1b\[39m").unwrap();
 
     let re_status_file =
-        Regex::new(r"\x1b\[38;5;\dm([A-Z?]) (\{(?:(.+) => (.+)\})|.+?)\x1b\[39m").unwrap();
+        Regex::new(r"\x1b\[38;5;[256]m([MADRC?]) (\{(?:(.+) => (.+)\})|.+?)\x1b\[39m").unwrap();
 
     // without a pager argument, output is collected and shown with the internal "minus" pager
     let mut buffer: Vec<u8> = Vec::new();
@@ -205,6 +205,7 @@ fn main() -> io::Result<()> {
                     }
                 }
                 "C" => writeln!(fd, "{RED}C {path}{CLEAR_LINE}{RESET}")?,
+                "?" => writeln!(fd, "{MAGENTA}? {path}{CLEAR_LINE}{RESET}")?,
                 _ => writeln!(fd, "{}", line)?,
             }
         } else if let Some(_captures) = re_change.captures(&line) {
