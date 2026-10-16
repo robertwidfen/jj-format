@@ -285,12 +285,25 @@ fn main() -> io::Result<()> {
         let (cols, rows) =
             crossterm::terminal::size().map_or((80, 25), |(c, r)| (c as usize, r as usize));
         let view = std::sync::Arc::new(std::sync::Mutex::new((0, rows, cols)));
+        let mut input = minus::input::HashedEventRegister::default();
+        input.add_described_key_events(&["<"], "top", |_, _| {
+            minus::input::InputEvent::UpdateUpperMark(0)
+        });
+        input.add_described_key_events(&[">"], "bottom", |_, _| {
+            minus::input::InputEvent::UpdateUpperMark(usize::MAX - 1)
+        });
+        input.add_described_key_events(&["b"], "page up", |_, ps| {
+            minus::input::InputEvent::UpdateUpperMark(ps.upper_mark.saturating_sub(ps.rows - 1))
+        });
+        input.add_described_key_events(&["f"], "page down", |_, ps| {
+            minus::input::InputEvent::UpdateUpperMark(ps.upper_mark.saturating_add(ps.rows - 1))
+        });
         pager
             .set_prompt(page_prompt(0, rows, text.lines().count()))
             .map_err(io::Error::other)?;
         pager
             .set_input_classifier(Box::new(PageIndicator {
-                inner: minus::input::HashedEventRegister::default(),
+                inner: input,
                 pager: pager.clone(),
                 view: view.clone(),
             }))
