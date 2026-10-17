@@ -164,7 +164,8 @@ fn main() -> io::Result<()> {
         Regex::new(r"\x1b\[38;5;3m(Created conflict in) (.+?):\x1b\[39m").unwrap();
 
     let re_status_file =
-        Regex::new(r"\x1b\[38;5;[256]m([MADRC?]) (\{(?:(.+) => (.+)\})|.+?)\x1b\[39m").unwrap();
+        Regex::new(r"\x1b\[38;5;[1256]m([MADRC?]) (([^ {]*)\{(?:(.+) => (.+)\})|.+?)\x1b\[39m")
+            .unwrap();
 
     // without a pager argument, output is collected and shown with the internal "minus" pager
     let mut buffer: Vec<u8> = Vec::new();
@@ -194,11 +195,11 @@ fn main() -> io::Result<()> {
                 "D" => writeln!(fd, "{RED}D {path}{CLEAR_LINE}{RESET}")?,
                 "R" => {
                     if path.contains("=>") {
-                        let old_path = normalize_path(captures.get(3).map_or("", |m| m.as_str()));
-                        let new_path = normalize_path(captures.get(4).map_or("", |m| m.as_str()));
+                        let new_path = normalize_path(captures.get(3).map_or("", |m| m.as_str()));
+                        let old_path = normalize_path(captures.get(4).map_or("", |m| m.as_str()));
                         writeln!(
                             fd,
-                            "{MAGENTA}R {new_path} {LIGHT_GRAY}<= {old_path}{CLEAR_LINE}{RESET}"
+                            "{MAGENTA}R {new_path} {LIGHT_GRAY}⇐ {old_path}{CLEAR_LINE}{RESET}"
                         )?;
                     } else {
                         writeln!(fd, "{BG_GREY}{BLUE}M {path}{CLEAR_LINE}{RESET}")?;
@@ -238,11 +239,11 @@ fn main() -> io::Result<()> {
                 }
                 "Modified" => {
                     if path.contains("=>") {
-                        let new_path = normalize_path(captures.get(7).map_or("", |m| m.as_str()));
-                        let old_path = normalize_path(captures.get(8).map_or("", |m| m.as_str()));
+                        let old_path = normalize_path(captures.get(7).map_or("", |m| m.as_str()));
+                        let new_path = normalize_path(captures.get(8).map_or("", |m| m.as_str()));
                         writeln!(
                             fd,
-                            "{BG_GREY}{MAGENTA}R {new_path} {LIGHT_GRAY}<= {old_path}{CLEAR_LINE}{RESET}"
+                            "{BG_GREY}{MAGENTA}R {new_path} {LIGHT_GRAY}⇐ {old_path}{CLEAR_LINE}{RESET}"
                         )?;
                     } else {
                         writeln!(fd, "{BG_GREY}{BLUE}M {path}{CLEAR_LINE}{RESET}")?;
