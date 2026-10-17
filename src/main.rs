@@ -261,6 +261,8 @@ fn main() -> io::Result<()> {
         } else if let Some(captures) = re_conflict_file.captures(&line) {
             let path = normalize_path(captures.get(2).map_or("", |m| m.as_str()));
             writeln!(fd, "{BG_GREY}{RED}C {path}{CLEAR_LINE}{RESET}")?;
+        } else if line.starts_with("Commit ID: ") {
+            writeln!(fd, "{BG_BLUE}{line}{CLEAR_LINE}{RESET}")?;
         } else {
             writeln!(fd, "{}", line)?;
         }
