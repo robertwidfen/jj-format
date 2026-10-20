@@ -151,7 +151,7 @@ fn main() -> io::Result<()> {
     let re_summary = Regex::new(r"^.*\x1b\[0m\s*([^\x1b]+).*").unwrap();
 
     let re_diff_file = Regex::new(
-        r"\x1b\[38;5;3m(Removed|Added|Modified) (((regular|executable) file)|symlink) (.+?( \((.+) => (.+)\))?):\x1b\[39m",
+        r"\x1b\[38;5;3m(Removed|Added|Modified|Conflict|Resolved conflict) (((regular|executable) file)|symlink|in) (.+?( \((.+) => (.+)\))?):\x1b\[39m",
     )
     .unwrap();
 
@@ -233,6 +233,12 @@ fn main() -> io::Result<()> {
             match status {
                 "Removed" => {
                     writeln!(fd, "{BG_GREY}{RED}D {path}{CLEAR_LINE}{RESET}")?;
+                }
+                "Conflict" => {
+                    writeln!(fd, "{BG_GREY}{RED}C {path}{CLEAR_LINE}{RESET}")?;
+                }
+                "Resolved conflict" => {
+                    writeln!(fd, "{BG_GREY}{BLUE}R {path}{CLEAR_LINE}{RESET}")?;
                 }
                 "Added" => {
                     writeln!(fd, "{BG_GREY}{GREEN}A {path}{CLEAR_LINE}{RESET}")?;
