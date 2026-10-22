@@ -23,7 +23,11 @@ pager = "jj-format"
 #pager = ["jj-format", "-l", "-20"]
 #pager = "jj-format less -FrfX"
 ```
+To disable pager setting temporarily:
 
+```shell
+jj --config ui.pager=:builtin ...
+```
 ## Options
 
 ```
