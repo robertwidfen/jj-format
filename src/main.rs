@@ -239,12 +239,18 @@ fn run_minus(args: &Args, buffer: &[u8]) -> io::Result<()> {
     let text = text.trim_end_matches('\n');
     let pager = minus::Pager::new();
 
-    // disable mouse capture
+    // minus always enables mouse capture, which prevents selecting text with the terminal;
+    // this hook runs right after minus has set up the terminal and drawn the first page
     if !args.mouse_support {
-        std::thread::spawn(|| {
-            std::thread::sleep(std::time::Duration::from_millis(50));
-            let _ = execute!(stdout(), DisableMouseCapture);
-        });
+        pager
+            .add_hook(
+                minus::hooks::Hook::PostPagerStart,
+                2,
+                Box::new(|_| {
+                    let _ = execute!(stdout(), DisableMouseCapture);
+                }),
+            )
+            .map_err(io::Error::other)?;
     }
 
     let (cols, rows) =
