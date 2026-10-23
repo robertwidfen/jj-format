@@ -2,9 +2,10 @@ use clap::Parser;
 use crossterm::event::{Event, KeyCode, KeyModifiers};
 use crossterm::{event::DisableMouseCapture, execute};
 use regex::{Captures, Regex};
+use std::cmp::Reverse;
 use std::io::stdout;
 use std::io::{self, BufRead, Write};
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitCode, Stdio};
 
 #[cfg(windows)]
 fn normalize_path(path: &str) -> String {
@@ -39,6 +40,10 @@ const RESET_FG: &str = "\u{1b}[39m";
 // const RESET_BG: &str = "\u{1b}[49m";
 // make background to go to end of line
 const CLEAR_LINE: &str = "\u{1b}[K";
+
+// marks for conflicts, C and R are taken by copies and renames
+const CONFLICT: &str = "×";
+const RESOLVED: &str = "✓";
 
 #[derive(Parser, Debug)]
 #[command(version, about)]
@@ -149,284 +154,403 @@ impl minus::input::InputClassifier for PageIndicator {
     }
 }
 
-fn main() -> io::Result<()> {
+fn main() -> ExitCode {
     let args = Args::parse();
-    let stdin = io::stdin();
+    match run(&args) {
+        Ok(()) => ExitCode::SUCCESS,
+        // the pager was quit before all output was written
+        Err(e) if e.kind() == io::ErrorKind::BrokenPipe => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("jj-format: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
 
-    // without a pager argument, output is collected and shown with the internal "minus" pager
-    let mut buffer: Vec<u8> = Vec::new();
-    let mut child = None;
+fn run(args: &Args) -> io::Result<()> {
+    let formatter = Formatter::new(args.summary_warning_len, args.summary_error_len, args.test);
+    let stdin = io::stdin().lock();
 
-    let fd: &mut dyn Write = if args.pager.is_empty() {
-        &mut buffer
-    } else {
-        let pager_program = &args.pager[0];
-        let pager_flags = &args.pager[1..];
-        let cmd = Command::new(pager_program)
+    let child = match args.pager.split_first() {
+        None => None,
+        Some((pager_program, pager_flags)) => match Command::new(pager_program)
             .args(pager_flags)
             .stdin(Stdio::piped())
-            .spawn()?;
-        child = Some(cmd);
-        child.as_mut().unwrap().stdin.as_mut().unwrap()
+            .spawn()
+        {
+            Ok(child) => Some(child),
+            Err(e) => {
+                eprintln!(
+                    "jj-format: cannot start pager `{pager_program}`: {e}, using built-in pager"
+                );
+                None
+            }
+        },
     };
 
-    let re_diff = make_re(RE_DIFF);
-    let re_status = make_re(RE_STATUS);
-    let re_conflict = make_re(RE_CONFLICT);
-    let re_change = make_re(RE_CHANGE);
-    let re_commit_id = make_re(RE_COMMIT_ID);
-    let re_reset = Regex::new(r"\u{1b}\[0m").unwrap();
-
-    for line in stdin.lock().lines().map_while(Result::ok) {
-        if let Some(captures) = re_diff.captures(&line)
-            && let status = get(&captures, "status")
-        {
-            let path = normalize_path(get(&captures, "path"));
-            match status {
-                s if s.starts_with("Removed") => {
-                    writeln!(fd, "{BG_GREY}{RED}D {path}{CLEAR_LINE}{RESET}")?;
-                }
-                s if s.starts_with("Created conflict in") => {
-                    writeln!(fd, "{BG_GREY}{RED}C {path}{CLEAR_LINE}{RESET}")?;
-                }
-                s if s.starts_with("Resolved conflict in") => {
-                    writeln!(fd, "{BG_GREY}{BLUE}R {path}{CLEAR_LINE}{RESET}")?;
-                }
-                s if s.starts_with("Added regular") => {
-                    writeln!(fd, "{BG_GREY}{GREEN}A {path}{CLEAR_LINE}{RESET}")?;
-                }
-                s if s.starts_with("Added executable") => {
-                    writeln!(
-                        fd,
-                        "{BG_GREY}{GREEN}A {path}{RESET_FG}+x{CLEAR_LINE}{RESET}"
-                    )?;
-                }
-                s if s.starts_with("Added symlink") => {
-                    writeln!(
-                        fd,
-                        "{BG_GREY}{GREEN}A {path}{RESET_FG}->{CLEAR_LINE}{RESET}"
-                    )?;
-                }
-                s if s.starts_with("Modified ") => {
-                    if line.contains("=>") {
-                        let old_path = normalize_path(get(&captures, "old_path"));
-                        let new_path = normalize_path(get(&captures, "new_path"));
-                        writeln!(
-                            fd,
-                            "{BG_GREY}{MAGENTA}R {new_path} {LIGHT_GRAY}⇐ {old_path}{CLEAR_LINE}{RESET}"
-                        )?;
-                    } else {
-                        writeln!(fd, "{BG_GREY}{BLUE}M {path}{CLEAR_LINE}{RESET}")?;
-                    }
-                }
-                s if s.starts_with("Executable ") => {
-                    writeln!(fd, "{BG_GREY}{BLUE}x {path}{RESET_FG}-x{CLEAR_LINE}{RESET}")?;
-                }
-                s if s.starts_with("Non-executable ") => {
-                    writeln!(fd, "{BG_GREY}{BLUE}X {path}{RESET_FG}+x{CLEAR_LINE}{RESET}")?;
-                }
-                _ => {
-                    panic!("Unhandled diff match {:?}", line);
-                }
-            }
-        } else if let Some(captures) = re_conflict.captures(&line) {
-            let path = normalize_path(get(&captures, "path"));
-            let sides = get(&captures, "sides");
-            writeln!(fd, "{RED}C {path}{RESET} {sides}-sided{CLEAR_LINE}{RESET}")?;
-        } else if let Some(captures) = re_status.captures(&line) {
-            let status = get(&captures, "status");
-            let path = normalize_path(get(&captures, "path"));
-            if args.test {
-                println!("status: {:?} {:?}", status, path);
-            }
-            match status {
-                "A" => writeln!(fd, "{GREEN}A {path}{CLEAR_LINE}{RESET}")?,
-                "M" => writeln!(fd, "{BLUE}M {path}{CLEAR_LINE}{RESET}")?,
-                "D" => writeln!(fd, "{RED}D {path}{CLEAR_LINE}{RESET}")?,
-                "R" => {
-                    if path.contains("=>") {
-                        let new_path = normalize_path(get(&captures, "new_path"));
-                        let old_path = normalize_path(get(&captures, "old_path"));
-                        writeln!(
-                            fd,
-                            "{MAGENTA}R {new_path} {LIGHT_GRAY}⇐ {old_path}{CLEAR_LINE}{RESET}"
-                        )?;
-                    } else {
-                        writeln!(fd, "{BG_GREY}{BLUE}M {path}{CLEAR_LINE}{RESET}")?;
-                    }
-                }
-                "C" => writeln!(fd, "{RED}C {path}{CLEAR_LINE}{RESET}")?,
-                "?" => writeln!(fd, "{MAGENTA}? {path}{CLEAR_LINE}{RESET}")?,
-                _ => {
-                    panic!("Unhandled status match {:?}", line);
-                }
-            }
-        } else if let Some(captures) = re_change.captures(&line) {
-            let mut bg_line = re_reset
-                .replace_all(&line, &format!("\u{1b}[0m{BG_BLUE}"))
-                .to_string();
-            let summary = get(&captures, "summary");
-            if !summary.is_empty() {
-                let mut new_summary = summary.to_string();
-                if let Some((i_warning, _)) = summary.char_indices().nth(args.summary_error_len + 1)
-                {
-                    new_summary.insert_str(i_warning, RED);
-                }
-                if let Some((i_error, _)) = summary.char_indices().nth(args.summary_warning_len + 1)
-                {
-                    new_summary.insert_str(i_error, YELLOW);
-                }
-                bg_line = bg_line.replace(summary, &new_summary);
-            }
-            writeln!(fd, "{BG_BLUE}{bg_line}{CLEAR_LINE}{RESET}")?;
-        } else if re_commit_id.is_match(&line) {
-            let line = re_reset
-                .replace_all(&line, &format!("\u{1b}[0m{BG_BLUE}"))
-                .to_string();
-            writeln!(fd, "{BG_BLUE}{line}{CLEAR_LINE}{RESET}")?;
-        } else {
-            writeln!(fd, "{}", line)?;
-        }
-    }
-
-    if let Some(mut child_process) = child {
-        drop(child_process.stdin.take());
-        child_process.wait()?;
+    if let Some(mut child) = child {
+        let mut pager_stdin = child.stdin.take().unwrap();
+        let result = formatter.format_stream(stdin, &mut pager_stdin);
+        drop(pager_stdin);
+        child.wait()?;
+        result
     } else {
-        let text = String::from_utf8_lossy(&buffer);
-        let text = text.trim_end_matches('\n');
-        let pager = minus::Pager::new();
+        // without a pager, output is collected and shown with the internal "minus" pager
+        let mut buffer: Vec<u8> = Vec::new();
+        formatter.format_stream(stdin, &mut buffer)?;
+        run_minus(args, &buffer)
+    }
+}
 
-        // disable mouse capture
-        if !args.mouse_support {
-            std::thread::spawn(|| {
-                std::thread::sleep(std::time::Duration::from_millis(50));
-                let _ = execute!(stdout(), DisableMouseCapture);
-            });
+fn run_minus(args: &Args, buffer: &[u8]) -> io::Result<()> {
+    let text = String::from_utf8_lossy(buffer);
+    let text = text.trim_end_matches('\n');
+    let pager = minus::Pager::new();
+
+    // disable mouse capture
+    if !args.mouse_support {
+        std::thread::spawn(|| {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            let _ = execute!(stdout(), DisableMouseCapture);
+        });
+    }
+
+    let (cols, rows) =
+        crossterm::terminal::size().map_or((80, 25), |(c, r)| (c as usize, r as usize));
+    let view = std::sync::Arc::new(std::sync::Mutex::new((0, rows, cols)));
+    let mut input = minus::input::HashedEventRegister::default();
+    input.add_described_key_events(&["<"], "top", |_, _| {
+        minus::input::InputEvent::UpdateUpperMark(0)
+    });
+    input.add_described_key_events(&[">"], "bottom", |_, _| {
+        minus::input::InputEvent::UpdateUpperMark(usize::MAX - 1)
+    });
+    input.add_described_key_events(&["b"], "page up", |_, ps| {
+        minus::input::InputEvent::UpdateUpperMark(ps.upper_mark.saturating_sub(ps.rows - 1))
+    });
+    input.add_described_key_events(&["f"], "page down", |_, ps| {
+        minus::input::InputEvent::UpdateUpperMark(ps.upper_mark.saturating_add(ps.rows - 1))
+    });
+    pager
+        .set_prompt(page_prompt(0, rows, text.lines().count()))
+        .map_err(io::Error::other)?;
+    pager
+        .set_input_classifier(Box::new(PageIndicator {
+            inner: input,
+            pager: pager.clone(),
+            view: view.clone(),
+        }))
+        .map_err(io::Error::other)?;
+    // by default minus calls process::exit on quit, which would skip reprinting the last page
+    pager
+        .remove_hook(minus::hooks::Hook::PostPagerExit, 1)
+        .map_err(io::Error::other)?;
+    pager.push_str(text).map_err(io::Error::other)?;
+    minus::page_all(pager).map_err(io::Error::other)?;
+
+    // minus uses the alternate screen if there is more than one screen of content, so reprint the end of the
+    // last visible page after quitting; rows are wrapped the same way as minus does it, upper_mark counts wrapped rows
+    let (upper_mark, rows, cols) = *view.lock().unwrap();
+    let wrapped: Vec<_> = text
+        .lines()
+        .flat_map(|line| textwrap::wrap(line, cols))
+        .collect();
+
+    // if everything fits on one screen minus prints it directly without paging
+    if wrapped.len() <= rows {
+        return Ok(());
+    }
+
+    // alternate screen was used - determine the range of lines to print manually
+    let start = upper_mark.min(wrapped.len());
+    let end = (upper_mark + rows.saturating_sub(1)).min(wrapped.len());
+    let range = match args.output_lines {
+        OutputLines::All => 0..wrapped.len(),
+        OutputLines::Page => start..end,
+        OutputLines::Rows(n) if n < 0 => end.saturating_sub(n.unsigned_abs())..end,
+        OutputLines::Rows(n) => start..(start + n.unsigned_abs()).min(wrapped.len()),
+    };
+
+    // wrapping splits colored text, so carry the SGR state (colors etc.) over to each printed row
+    let re_sgr = Regex::new(r"\u{1b}\[([0-9;]*)m").unwrap();
+    let mut sgr = String::new();
+    let mut out = stdout().lock();
+    for (i, row) in wrapped[..range.end].iter().enumerate() {
+        if i >= range.start {
+            writeln!(out, "{sgr}{row}{RESET}")?;
         }
-
-        let (cols, rows) =
-            crossterm::terminal::size().map_or((80, 25), |(c, r)| (c as usize, r as usize));
-        let view = std::sync::Arc::new(std::sync::Mutex::new((0, rows, cols)));
-        let mut input = minus::input::HashedEventRegister::default();
-        input.add_described_key_events(&["<"], "top", |_, _| {
-            minus::input::InputEvent::UpdateUpperMark(0)
-        });
-        input.add_described_key_events(&[">"], "bottom", |_, _| {
-            minus::input::InputEvent::UpdateUpperMark(usize::MAX - 1)
-        });
-        input.add_described_key_events(&["b"], "page up", |_, ps| {
-            minus::input::InputEvent::UpdateUpperMark(ps.upper_mark.saturating_sub(ps.rows - 1))
-        });
-        input.add_described_key_events(&["f"], "page down", |_, ps| {
-            minus::input::InputEvent::UpdateUpperMark(ps.upper_mark.saturating_add(ps.rows - 1))
-        });
-        pager
-            .set_prompt(page_prompt(0, rows, text.lines().count()))
-            .map_err(io::Error::other)?;
-        pager
-            .set_input_classifier(Box::new(PageIndicator {
-                inner: input,
-                pager: pager.clone(),
-                view: view.clone(),
-            }))
-            .map_err(io::Error::other)?;
-        // by default minus calls process::exit on quit, which would skip reprinting the last page
-        pager
-            .remove_hook(minus::hooks::Hook::PostPagerExit, 1)
-            .map_err(io::Error::other)?;
-        pager.push_str(text).map_err(io::Error::other)?;
-        minus::page_all(pager).map_err(io::Error::other)?;
-
-        // minus uses the alternate screen if there is more than one screen of content, so reprint the end of the
-        // last visible page after quitting; rows are wrapped the same way as minus does it, upper_mark counts wrapped rows
-        let (upper_mark, rows, cols) = *view.lock().unwrap();
-        let wrapped: Vec<_> = text
-            .lines()
-            .flat_map(|line| textwrap::wrap(line, cols))
-            .collect();
-
-        // if everything fits on one screen minus prints it directly without paging
-        if wrapped.len() <= rows {
-            return Ok(());
-        }
-
-        // alternate screen was used - determine the range of lines to print manually
-        let start = upper_mark.min(wrapped.len());
-        let end = (upper_mark + rows.saturating_sub(1)).min(wrapped.len());
-        let range = match args.output_lines {
-            OutputLines::All => 0..wrapped.len(),
-            OutputLines::Page => start..end,
-            OutputLines::Rows(n) if n < 0 => end.saturating_sub(n.unsigned_abs())..end,
-            OutputLines::Rows(n) => start..(start + n.unsigned_abs()).min(wrapped.len()),
-        };
-
-        // wrapping splits colored text, so carry the SGR state (colors etc.) over to each printed row
-        let re_sgr = Regex::new(r"\u{1b}\[([0-9;]*)m").unwrap();
-        let mut sgr = String::new();
-        let mut out = stdout().lock();
-        for (i, row) in wrapped[..range.end].iter().enumerate() {
-            if i >= range.start {
-                writeln!(out, "{sgr}{row}\u{1b}\\[0m")?;
+        for cap in re_sgr.captures_iter(row) {
+            let params = &cap[1];
+            if params.is_empty() || params == "0" || params.starts_with("0;") {
+                sgr.clear();
             }
-            for cap in re_sgr.captures_iter(row) {
-                let params = &cap[1];
-                if params.is_empty() || params == "0" || params.starts_with("0;") {
-                    sgr.clear();
-                }
-                if !params.is_empty() && params != "0" {
-                    sgr.push_str(&cap[0]);
-                }
+            if !params.is_empty() && params != "0" {
+                sgr.push_str(&cap[0]);
             }
         }
     }
-
     Ok(())
 }
 
+/// Rewrites lines of jj output, lines it does not recognize are passed through unchanged
+struct Formatter {
+    re_diff: Regex,
+    re_status: Regex,
+    re_conflict: Regex,
+    re_change: Regex,
+    re_commit_id: Regex,
+    re_reset: Regex,
+    summary_warning_len: usize,
+    summary_error_len: usize,
+    test: bool,
+}
+
+impl Formatter {
+    fn new(summary_warning_len: usize, summary_error_len: usize, test: bool) -> Self {
+        Formatter {
+            re_diff: make_re(RE_DIFF),
+            re_status: make_re(RE_STATUS),
+            re_conflict: make_re(RE_CONFLICT),
+            re_change: make_re(RE_CHANGE),
+            re_commit_id: make_re(RE_COMMIT_ID),
+            re_reset: Regex::new(r"\u{1b}\[0m").unwrap(),
+            summary_warning_len,
+            summary_error_len,
+            test,
+        }
+    }
+
+    /// Formats `input` line by line into `out`; lines that are not valid UTF-8 are copied byte for byte
+    fn format_stream(&self, mut input: impl BufRead, out: &mut dyn Write) -> io::Result<()> {
+        let mut buf = Vec::new();
+        loop {
+            buf.clear();
+            if input.read_until(b'\n', &mut buf)? == 0 {
+                return Ok(());
+            }
+            let content = buf.strip_suffix(b"\n").unwrap_or(&buf);
+            let content = content.strip_suffix(b"\r").unwrap_or(content);
+            match std::str::from_utf8(content)
+                .ok()
+                .and_then(|line| self.format_line(line))
+            {
+                Some(line) => writeln!(out, "{line}")?,
+                None => {
+                    out.write_all(&buf)?;
+                    if !buf.ends_with(b"\n") {
+                        out.write_all(b"\n")?;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Returns the formatted line or None if the line should be kept as it is
+    fn format_line(&self, line: &str) -> Option<String> {
+        if let Some(captures) = self.re_diff.captures(line) {
+            Some(format_diff_header(&captures))
+        } else if let Some(captures) = self.re_conflict.captures(line) {
+            let prefix = get(&captures, "prefix");
+            let path = normalize_path(get(&captures, "path"));
+            let description = get(&captures, "description");
+            Some(format!(
+                "{prefix}{RED}{CONFLICT} {path}{RESET} {description}{CLEAR_LINE}{RESET}"
+            ))
+        } else if let Some(captures) = self.re_status.captures(line) {
+            let status = get(&captures, "status");
+            if self.test {
+                println!("status: {:?} {:?}", status, get(&captures, "path"));
+            }
+            Some(format_status(&captures))
+        } else if let Some(captures) = self.re_change.captures(line) {
+            let mut line = line.to_string();
+            if let Some(summary) = captures.name("summary") {
+                line.replace_range(summary.range(), &self.highlight_summary(summary.as_str()));
+            }
+            let line = self
+                .re_reset
+                .replace_all(&line, format!("{RESET}{BG_BLUE}"));
+            Some(format!("{BG_BLUE}{line}{CLEAR_LINE}{RESET}"))
+        } else if self.re_commit_id.is_match(line) {
+            let line = self.re_reset.replace_all(line, format!("{RESET}{BG_BLUE}"));
+            Some(format!("{BG_BLUE}{line}{CLEAR_LINE}{RESET}"))
+        } else {
+            None
+        }
+    }
+
+    /// Colors the characters of the summary beyond the warning and error length
+    fn highlight_summary(&self, summary: &str) -> String {
+        let mut marks = [
+            (self.summary_warning_len, YELLOW),
+            (self.summary_error_len, RED),
+        ];
+        // insert from the back so earlier byte positions stay valid
+        marks.sort_by_key(|&(len, _)| Reverse(len));
+        let mut highlighted = summary.to_string();
+        for (len, color) in marks {
+            if let Some((i, _)) = summary.char_indices().nth(len) {
+                highlighted.insert_str(i, color);
+            }
+        }
+        highlighted
+    }
+}
+
+/// Formats a file header of a color-words diff
+fn format_diff_header(captures: &Captures) -> String {
+    let prefix = get(captures, "prefix");
+    let header = |color: &str, mark: &str, path: &str, suffix: &str| {
+        format!("{prefix}{BG_GREY}{color}{mark} {path}{RESET_FG}{suffix}{CLEAR_LINE}{RESET}")
+    };
+
+    if let Some(path) = captures.name("conflict_path") {
+        let path = normalize_path(path.as_str());
+        return match get(captures, "conflict_op") {
+            "Resolved" => header(GREEN, RESOLVED, path, ""),
+            _ => header(RED, CONFLICT, path, ""),
+        };
+    }
+    if let Some(path) = captures.name("became_path") {
+        let path = normalize_path(path.as_str());
+        return match (get(captures, "from"), get(captures, "to")) {
+            ("Executable file", "non-executable") => header(BLUE, "x", path, " -x"),
+            ("Non-executable file", "executable") => header(BLUE, "X", path, " +x"),
+            (from, to) => header(
+                BLUE,
+                "M",
+                path,
+                &format!(" {LIGHT_GRAY}{} → {to}", from.to_lowercase()),
+            ),
+        };
+    }
+    if let Some(path) = captures.name("special_path") {
+        return header(BLUE, "M", path.as_str(), "");
+    }
+
+    let op = get(captures, "op");
+    if let (Some(old_path), Some(new_path)) = (captures.name("old_path"), captures.name("new_path"))
+    {
+        // jj prints copies the same way as renames, so they can't be told apart here
+        let old_path = normalize_path(old_path.as_str());
+        let new_path = normalize_path(new_path.as_str());
+        return header(
+            MAGENTA,
+            "R",
+            new_path,
+            &format!(" {LIGHT_GRAY}⇐ {old_path}"),
+        );
+    }
+    let path = normalize_path(get(captures, "path"));
+    let (color, mark, sign) = match op {
+        "Added" => (GREEN, "A", "+"),
+        "Removed" => (RED, "D", "-"),
+        _ => (BLUE, "M", ""),
+    };
+    let suffix = match get(captures, "type") {
+        "regular file" => String::new(),
+        "executable file" if sign.is_empty() => String::new(),
+        "executable file" => format!(" {sign}x"),
+        "symlink" => " ->".to_string(),
+        other => format!(" {LIGHT_GRAY}({other})"),
+    };
+    header(color, mark, path, &suffix)
+}
+
+/// Formats a line of `jj status` or `jj diff --summary`
+fn format_status(captures: &Captures) -> String {
+    let prefix = get(captures, "prefix");
+    let path = get(captures, "path");
+    let (color, mark) = match get(captures, "status") {
+        "A" => (GREEN, "A"),
+        "D" => (RED, "D"),
+        "R" => (MAGENTA, "R"),
+        "C" => (GREEN, "C"),
+        "?" => (MAGENTA, "?"),
+        _ => (BLUE, "M"),
+    };
+    match expand_braces(path) {
+        Some((old_path, new_path)) => {
+            let old_path = normalize_path(&old_path);
+            let new_path = normalize_path(&new_path);
+            format!("{prefix}{color}{mark} {new_path} {LIGHT_GRAY}⇐ {old_path}{CLEAR_LINE}{RESET}")
+        }
+        None => {
+            let path = normalize_path(path);
+            format!("{prefix}{color}{mark} {path}{CLEAR_LINE}{RESET}")
+        }
+    }
+}
+
+/// Splits a jj rename/copy path like `a/{b => c}/x` into its old and new path (`a/b/x`, `a/c/x`)
+fn expand_braces(path: &str) -> Option<(String, String)> {
+    let (before, rest) = path.split_once('{')?;
+    let (inner, after) = rest.split_once('}')?;
+    let (old, new) = inner.split_once(" => ")?;
+    let join = |middle: &str| {
+        // an empty side like `{ => sub}/x` leaves a doubled or leading slash behind
+        let path = format!("{before}{middle}{after}").replace("//", "/");
+        path.strip_prefix('/').map(str::to_string).unwrap_or(path)
+    };
+    Some((join(old), join(new)))
+}
+
+// prefix of lines drawn inside a jj log graph, e.g. `│ ~  `
+const GRAPH: &str = r"(?<prefix>[\s│├─╮╯╭╰┤┬┴┼~|/\\]*)";
+
 const RE_DIFF: &str = r"
-ESC\[38;5;(?<color>\d+)m
-(?<status>
-  ((Removed|Added|Modified) (((regular|executable) file)|symlink))|
-  ((Resolved conflict|Created conflict) in)|
-  ((Non-e|E)xecutable file became (non-)?executable at)
-) +
-(?<path>[^(]+)( \((?<old_path>.+) => (?<new_path>.+)\))?:
-ESC\[39m
+^GRAPH
+ESC\[38;5;\d+m
+(?:
+  (?<conflict_op>Created|Resolved|Modified) conflict in (?<conflict_path>.+)|
+  (?<op>Added|Removed|Modified)
+  \ (?<type>regular file|executable file|symlink|tree|Git submodule|conflict)
+  \ (?<path>.+?)(?:\ \((?<old_path>.+)\ =>\ (?<new_path>.+)\))?|
+  (?<from>[A-Z][A-Za-z\ -]*?) became (?<to>[A-Za-z\ -]+?) at (?<became_path>.+)|
+  Modified (?<special_path>JJ-COMMIT-DESCRIPTION)
+)
+:ESC\[39m$
 ";
 
 const RE_STATUS: &str = r"
-ESC\[38;5;(?<color>\d+)m(?<status>[MADRC?]) +
-(?<path>([^ {]*)\{(?:(?<old_path>.+) => (?<new_path>.+)\})|.+?)ESC\[39m
+^GRAPH
+ESC\[38;5;\d+m(?<status>[MADRC?])\ (?<path>.+?)ESC\[39m$
 ";
 
 const RE_CONFLICT: &str = r"
-(?<path>[^ ]+)\s+
-ESC\[38;5;(?<color>\d+)m(?<sides>\d+)-sided conflictESC\[39m
+^GRAPH
+(?<path>\S.*?)\s+
+ESC\[38;5;\d+m(?<description>\d+-sided\ conflict[^ESC]*)ESC\[39m$
 ";
 
 const RE_CHANGE: &str = r"
-^.*(ESC\[1mESC\[38;5;(?<color>\d+)m)?(?<mark>[@◆○×])(ESC\[0m)? +
+^.*(ESC\[1mESC\[38;5;(?<color>\d+)m)?(?<mark>[@◆○×])(ESC\[0m)?\ +
 .*ESC\[1mESC\[38;5;5m(?<change_id>[a-z]+)
-(ESC\[0m *(?<summary>[^ ESC]+[^ESC]+[^ ESC]+))?
+(ESC\[0m\ *(?<summary>[^\ ESC](?:[^ESC]*[^\ ESC])?))?
 .*
 ";
 
 const RE_COMMIT_ID: &str = r"
 ^.*(?<mark>[@◆○×]).*
-Commit ID:
+Commit\ ID:
 .*ESC\[38;5;4m(?<commit_id>[a-z0-9]+)ESC\[39m
 .*
 ";
 
+/// Replaces the placeholder `ESC` by the escape character, but not inside words like `DESCRIPTION`
 fn replace_esc(s: &str) -> String {
-    s.replace("ESC", "\u{1b}")
+    Regex::new(r"ESC\b")
+        .unwrap()
+        .replace_all(s, "\u{1b}")
+        .to_string()
 }
 
+/// Compiles a regex written over several lines; newlines and indentation are removed,
+/// so literal spaces at the start of a line must be escaped as `\ `
 fn make_re(re: &str) -> Regex {
     let re_nl_space = Regex::new(r"\n\s*").unwrap();
-    let re = &replace_esc(&re_nl_space.replace_all(re, "").to_string());
-    Regex::new(&re).unwrap()
+    let re = re_nl_space.replace_all(re, "").replace("GRAPH", GRAPH);
+    Regex::new(&replace_esc(&re)).unwrap()
 }
 
 fn get<'a>(captures: &'a Captures<'a>, name: &str) -> &'a str {
@@ -436,134 +560,255 @@ fn get<'a>(captures: &'a Captures<'a>, name: &str) -> &'a str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
+
+    fn formatter() -> Formatter {
+        Formatter::new(50, 72, false)
+    }
+
+    /// Strips SGR and erase-line sequences so expectations stay readable
+    fn plain(s: &str) -> String {
+        Regex::new(r"\u{1b}\[[0-9;]*[mK]")
+            .unwrap()
+            .replace_all(s, "")
+            .to_string()
+    }
+
+    fn format_plain(line: &str) -> Option<String> {
+        formatter()
+            .format_line(&replace_esc(line))
+            .map(|l| plain(&l))
+    }
 
     #[test]
-    fn test_re_diff() {
-        let re_diff = make_re(RE_DIFF);
-        println!("re_diff: {:?}", re_diff);
-
-        for (line, (color, status, path, new_path, old_path)) in vec![
+    fn test_diff_headers() {
+        for (line, expected) in [
             (
-                "ESC[38;5;3mCreated conflict in src/main.rs:ESC[39m",
-                ("3", "Created conflict in", "src/main.rs", "", ""),
+                "ESC[38;5;3mAdded regular file src/main.rs:ESC[39m",
+                "A src/main.rs",
             ),
             (
-                "ESC[38;5;3mModified regular file n (m => n):ESC[39m",
-                ("3", "Modified regular file", "n", "n", "m"),
+                "ESC[38;5;3mAdded executable file run.sh:ESC[39m",
+                "A run.sh +x",
+            ),
+            ("ESC[38;5;3mAdded symlink link:ESC[39m", "A link ->"),
+            (
+                "ESC[38;5;3mAdded Git submodule sub:ESC[39m",
+                "A sub (Git submodule)",
             ),
             (
                 "ESC[38;5;3mRemoved regular file src/main.rs:ESC[39m",
-                ("3", "Removed regular file", "src/main.rs", "", ""),
+                "D src/main.rs",
             ),
             (
-                "ESC[38;5;3mAdded regular file src/main.rs:ESC[39m",
-                ("3", "Added regular file", "src/main.rs", "", ""),
+                "ESC[38;5;3mRemoved executable file run.sh:ESC[39m",
+                "D run.sh -x",
+            ),
+            (
+                "ESC[38;5;3mModified regular file a b/f(1).txt:ESC[39m",
+                "M a b/f(1).txt",
+            ),
+            (
+                "ESC[38;5;3mModified executable file run.sh:ESC[39m",
+                "M run.sh",
+            ),
+            (
+                "ESC[38;5;3mModified regular file n (m => n):ESC[39m",
+                "R n ⇐ m",
+            ),
+            (
+                "ESC[38;5;3mModified regular file a/c/x (a/b/x => a/c/x):ESC[39m",
+                "R a/c/x ⇐ a/b/x",
+            ),
+            (
+                "ESC[38;5;3mCreated conflict in src/main.rs:ESC[39m",
+                "× src/main.rs",
+            ),
+            (
+                "ESC[38;5;3mModified conflict in src/main.rs:ESC[39m",
+                "× src/main.rs",
+            ),
+            (
+                "ESC[38;5;3mResolved conflict in src/main.rs:ESC[39m",
+                "✓ src/main.rs",
+            ),
+            (
+                "ESC[38;5;3mExecutable file became non-executable at x.sh:ESC[39m",
+                "x x.sh -x",
+            ),
+            (
+                "ESC[38;5;3mNon-executable file became executable at x.sh:ESC[39m",
+                "X x.sh +x",
+            ),
+            (
+                "ESC[38;5;3mRegular file became symlink at l:ESC[39m",
+                "M l regular file → symlink",
+            ),
+            (
+                "ESC[38;5;3mSymlink became regular file at l:ESC[39m",
+                "M l symlink → regular file",
+            ),
+            (
+                "ESC[38;5;3mModified JJ-COMMIT-DESCRIPTION:ESC[39m",
+                "M JJ-COMMIT-DESCRIPTION",
+            ),
+            (
+                "│ ~  ESC[38;5;3mModified conflict in cf.txt:ESC[39m",
+                "│ ~  × cf.txt",
             ),
         ] {
-            let line = replace_esc(line);
-            println!("Testing {:?}", line);
-            assert!(re_diff.is_match(&line));
-            let captures = re_diff.captures(&line).unwrap();
-            assert_eq!(get(&captures, "color"), color);
-            assert_eq!(get(&captures, "status"), status);
-            assert_eq!(get(&captures, "path"), path);
-            assert_eq!(get(&captures, "new_path"), new_path);
-            assert_eq!(get(&captures, "old_path"), old_path);
+            assert_eq!(format_plain(line).as_deref(), Some(expected), "{line}");
         }
     }
 
     #[test]
-    fn test_re_status() {
-        let re_status = make_re(RE_STATUS);
-        println!("re_status: {}", re_status);
-
-        for (line, (color, status, path)) in vec![
-            ("ESC[38;5;2mA README.mdESC[39m", ("2", "A", "README.md")),
-            ("ESC[38;5;6mA README.mdESC[39m", ("6", "A", "README.md")),
-            ("ESC[38;5;2mM src/main.rsESC[39m", ("2", "M", "src/main.rs")),
-            ("ESC[38;5;6mM src/main.rsESC[39m", ("6", "M", "src/main.rs")),
+    fn test_status() {
+        for (line, expected) in [
+            ("ESC[38;5;2mA README.mdESC[39m", "A README.md"),
+            ("ESC[38;5;6mM src/main.rsESC[39m", "M src/main.rs"),
+            ("ESC[38;5;1mD linkESC[39m", "D link"),
+            ("ESC[38;5;5m? new.txtESC[39m", "? new.txt"),
+            (
+                "ESC[38;5;6mR {src => lib}/a.rsESC[39m",
+                "R lib/a.rs ⇐ src/a.rs",
+            ),
+            (
+                "ESC[38;5;6mR a/{b => c}/x.txtESC[39m",
+                "R a/c/x.txt ⇐ a/b/x.txt",
+            ),
+            (
+                "ESC[38;5;2mC {keep.txt => keep2.txt}ESC[39m",
+                "C keep2.txt ⇐ keep.txt",
+            ),
+            (
+                "   ESC[38;5;6mM dir with space/f(1).txtESC[39m",
+                "   M dir with space/f(1).txt",
+            ),
         ] {
-            let line = replace_esc(line);
-            println!("Testing {:?}", line);
-            assert!(re_status.is_match(&line));
-
-            let captures = re_status.captures(&line).unwrap();
-            assert_eq!(get(&captures, "color"), color);
-            assert_eq!(get(&captures, "status"), status);
-            assert_eq!(get(&captures, "path"), path);
+            assert_eq!(format_plain(line).as_deref(), Some(expected), "{line}");
         }
     }
 
     #[test]
-    fn test_re_conflict() {
-        let re_conflict = make_re(RE_CONFLICT);
-        println!("re_conflict: {:?}", re_conflict);
-
-        for (line, (path, sides)) in vec![(
-            "src/main.rs    ESC[38;5;3m2-sided conflictESC[39m",
-            ("src/main.rs", "2"),
-        )] {
-            let line = replace_esc(line);
-            println!("Testing {:?}", line);
-            assert!(re_conflict.is_match(&line));
-
-            let captures = re_conflict.captures(&line).unwrap();
-            assert_eq!(get(&captures, "path"), path);
-            assert_eq!(get(&captures, "sides"), sides);
+    fn test_conflict_list() {
+        for (line, expected) in [
+            (
+                "cf.txt    ESC[38;5;3m2-sided conflictESC[39m",
+                "× cf.txt 2-sided conflict",
+            ),
+            (
+                "a b.txt    ESC[38;5;3m3-sided conflict including 1 deletionESC[39m",
+                "× a b.txt 3-sided conflict including 1 deletion",
+            ),
+        ] {
+            assert_eq!(format_plain(line).as_deref(), Some(expected), "{line}");
         }
     }
 
     #[test]
-    fn test_re_change() {
-        let re_change = make_re(RE_CHANGE);
-        println!("re_change: '{:?}'", re_change);
-        for (line, (mark, summary)) in vec![
-            (
-                "│ ESC[1mESC[38;5;1m@ESC[0m  4 ESC[1mESC[38;5;5mmESC[0m    summary2",
-                ("@", "summary2"),
-            ),
-            (
-                "ESC[1mESC[38;5;14m◆ESC[0m  ESC[38;5;2m-ESC[39m ESC[1mESC[38;5;5mzESC[0m    ESC[38;5;2m-ESC[39m",
-                ("◆", ""),
-            ),
-            ("○  4 ESC[1mESC[38;5;5mlESC[0m    summary", ("○", "summary")),
-            (
-                "ESC[1mESC[38;5;1m×ESC[0m  ESC[38;5;2m-ESC[39m ESC[1mESC[38;5;5mxESC[0m    summary",
-                ("×", "summary"),
-            ),
+    fn test_unrecognized_lines_pass_through() {
+        for line in [
+            "plain text",
+            "ESC[38;5;3mModified something else:ESC[39m",
+            "ESC[38;5;6mFF {a => b}ESC[39m",
+            "Working copy changes:",
         ] {
-            let line = replace_esc(line);
-            println!("Testing {:?}", line);
-            assert!(re_change.is_match(&line));
-
-            let captures = re_change.captures(&line).unwrap();
-            assert_eq!(get(&captures, "mark"), mark);
-            assert_eq!(get(&captures, "summary"), summary);
+            assert_eq!(format_plain(line), None, "{line}");
         }
     }
 
     #[test]
-    fn test_re_commit_id() {
-        let re_commit_id = make_re(RE_COMMIT_ID);
-        println!("re_commit_id: {:?}", re_commit_id);
+    fn test_expand_braces() {
+        for (path, expected) in [
+            ("{a => b}", Some(("a", "b"))),
+            ("{src => lib}/a.rs", Some(("src/a.rs", "lib/a.rs"))),
+            ("a/{b => c}/x", Some(("a/b/x", "a/c/x"))),
+            ("{ => sub}/x", Some(("x", "sub/x"))),
+            ("a/{b => }/x", Some(("a/b/x", "a/x"))),
+            ("plain", None),
+        ] {
+            let expected = expected.map(|(o, n)| (o.to_string(), n.to_string()));
+            assert_eq!(expand_braces(path), expected, "{path}");
+        }
+    }
 
-        for (line, (mark, commit_id)) in vec![
-            (
-                "│ ESC[1mESC[38;5;1m×ESC[0m  Commit ID: ESC[38;5;4m4ed6adab1aa245ba48d0a3e749621d29cf9445cfESC[39m",
-                ("×", "4ed6adab1aa245ba48d0a3e749621d29cf9445cf"),
-            ),
-            (
-                "│ ESC[1mESC[38;5;1m@ESC[0m  Commit ID: ESC[38;5;4m09c05c575cf77b0d7a541a5fbbc461a962b168b1ESC[39m",
-                ("@", "09c05c575cf77b0d7a541a5fbbc461a962b168b1"),
-            ),
+    #[test]
+    fn test_change_summary() {
+        let summary = "first commit with a really long summary line that definitely exceeds seventy-two chars";
+        let line = replace_esc(&format!("○    7 ESC[1mESC[38;5;5mkmzESC[0m  {summary}"));
+        let formatted = formatter().format_line(&line).unwrap();
+        assert_eq!(plain(&formatted), plain(&line));
+        // the 51st character starts the warning, the 73rd the error
+        let (ok, rest) = summary.split_at(50);
+        let (warning, error) = rest.split_at(22);
+        assert!(formatted.contains(&format!("{ok}{YELLOW}{warning}{RED}{error}")));
+
+        // only the summary is highlighted, not the same text in the change id
+        let line = replace_esc("@  1 ESC[1mESC[38;5;5mmESC[0m    m");
+        let formatted = Formatter::new(0, 72, false).format_line(&line).unwrap();
+        assert!(formatted.contains("\u{1b}[38;5;5mm\u{1b}[0m"));
+        assert!(formatted.contains(&format!("{RESET}{BG_BLUE}    {YELLOW}m")));
+    }
+
+    #[test]
+    fn test_change_lines() {
+        for line in [
+            "│ ESC[1mESC[38;5;1m@ESC[0m  4 ESC[1mESC[38;5;5mmESC[0m    summary2",
+            "ESC[1mESC[38;5;14m◆ESC[0m  ESC[38;5;2m-ESC[39m ESC[1mESC[38;5;5mzESC[0m    ESC[38;5;2m-ESC[39m",
+            "○  4 ESC[1mESC[38;5;5mlESC[0m    summary",
+            "│ ESC[1mESC[38;5;1m×ESC[0m  Commit ID: ESC[38;5;4m4ed6adab1aa245ba48d0a3e749621d29cf9445cfESC[39m",
         ] {
             let line = replace_esc(line);
-            println!("Testing {:?}", line);
-            assert!(re_commit_id.is_match(&line));
-
-            let captures = re_commit_id.captures(&line).unwrap();
-            assert_eq!(get(&captures, "mark"), mark);
-            assert_eq!(get(&captures, "commit_id"), commit_id);
+            let formatted = formatter().format_line(&line).expect(&line);
+            assert!(formatted.starts_with(BG_BLUE), "{line}");
+            assert_eq!(plain(&formatted), plain(&line));
         }
+    }
+
+    #[test]
+    fn test_non_utf8_is_kept() {
+        let input = b"\x1b[38;5;3mModified regular file bin.txt:\x1b[39m\n\xff\xfe latin1\n\x1b[38;5;2mA after.txt\x1b[39m";
+        let mut out = Vec::new();
+        formatter().format_stream(&input[..], &mut out).unwrap();
+        let out_text = String::from_utf8_lossy(&out);
+        let lines: Vec<_> = out_text.lines().map(plain).collect();
+        assert_eq!(
+            lines,
+            ["M bin.txt", "\u{fffd}\u{fffd} latin1", "A after.txt"]
+        );
+        let raw = b"\xff\xfe latin1\n";
+        assert!(out.windows(raw.len()).any(|w| w == raw));
+    }
+
+    /// Runs every `tests/fixtures/*.in` (raw `jj --color=always` output) through the formatter and compares
+    /// with the `.out` file next to it; set `BLESS=1` to (re)write the `.out` files
+    #[test]
+    fn test_fixtures() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        let bless = std::env::var_os("BLESS").is_some();
+        let mut count = 0;
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let input_path = entry.unwrap().path();
+            if input_path.extension().is_none_or(|e| e != "in") {
+                continue;
+            }
+            count += 1;
+            let input = std::fs::read(&input_path).unwrap();
+            let mut actual = Vec::new();
+            formatter().format_stream(&input[..], &mut actual).unwrap();
+            let expected_path = input_path.with_extension("out");
+            if bless {
+                std::fs::write(&expected_path, &actual).unwrap();
+            } else {
+                let expected = std::fs::read(&expected_path).unwrap_or_default();
+                assert!(
+                    actual == expected,
+                    "{} differs, rerun with BLESS=1 to update:\n{}",
+                    input_path.display(),
+                    plain(&String::from_utf8_lossy(&actual))
+                );
+            }
+        }
+        assert!(count > 0, "no fixtures found in {}", dir.display());
     }
 }

@@ -1,0 +1,10 @@
+[38;5;3mModified JJ-COMMIT-DESCRIPTION:[39m
+[38;5;1m   1[39m [38;5;2m   1[39m: [4m[38;5;1mmv[38;5;2mmoves[24m[39m
+[38;5;3mAdded regular file a/b/x.txt:[39m
+     [38;5;2m   1[39m: [4m[38;5;2msame[24m[39m
+[38;5;3mRemoved regular file a/c/x.txt:[39m
+[38;5;1m   1[39m     : [4m[38;5;1msame[24m[39m
+[38;5;3mAdded regular file keep2.txt:[39m
+     [38;5;2m   1[39m: [4m[38;5;2mkeep[24m[39m
+[38;5;3mRemoved regular file keep3.txt:[39m
+[38;5;1m   1[39m     : [4m[38;5;1mkeep[24m[39m

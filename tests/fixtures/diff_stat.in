@@ -1,0 +1,10 @@
+added.txt               | 1 [38;5;2m+[38;5;1m[39m
+bin.txt                 | 1 [38;5;2m+[38;5;1m[39m
+dir with space/f(1).txt | 1 [38;5;2m+[38;5;1m[39m
+exe.sh                  | 0[38;5;1m[39m
+keep.txt                | 1 [38;5;2m+[38;5;1m[39m
+{keep.txt => keep2.txt} | 0[38;5;1m[39m
+{src => lib}/a.rs       | 1 [38;5;2m+[38;5;1m[39m
+link                    | 1 [38;5;1m-[39m
+link2                   | 1 [38;5;2m+[38;5;1m[39m
+9 files changed, 6 insertions(+), 1 deletion(-)

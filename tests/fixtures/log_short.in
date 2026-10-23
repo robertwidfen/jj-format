@@ -1,0 +1,17 @@
+[1m[38;5;14m◆[0m  [38;5;2m-[39m [1m[38;5;5mzz[0m   [38;5;2m-[39m
+○      7 [1m[38;5;5mq[0m    first commit with a really long summary line that definitely exceeds seventy-two chars
+├─┬─╮
+│ │ ○  9 [1m[38;5;5mzs[0m   second
+│ │ ○  3 [1m[38;5;5mr[0m    typechange
+│ │ ○  1 [1m[38;5;5myq[0m   moves
+│ │ ○  2 [1m[38;5;5myo[0m   mv
+│ ○    1 [1m[38;5;5mkp[0m   side1
+│ ├─╮
+│ │ [1m[38;5;1m×[0m  1 [1m[38;5;5mn[0m    created
+○ │  1 [1m[38;5;5mkm[0m   side2
+├─╯
+[1m[38;5;1m×[0m  [38;5;2m-[39m [1m[38;5;5mw[0m    merge
+[1m[38;5;1m×[0m    1 [1m[38;5;5ml[0m    modconflict
+├─╮
+│ ○  1 [1m[38;5;5mkx[0m   resolve
+[1m[38;5;1m@[0m  1 [1m[38;5;5mx[0m    [38;5;2m-[39m

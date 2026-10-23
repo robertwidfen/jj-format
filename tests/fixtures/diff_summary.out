@@ -1,0 +1,9 @@
+[32mA added.txt[K[0m
+[34mM bin.txt[K[0m
+[34mM dir with space/f(1).txt[K[0m
+[34mM exe.sh[K[0m
+[34mM keep.txt[K[0m
+[32mC keep2.txt [38;2;120;120;120m⇐ keep.txt[K[0m
+[35mR lib/a.rs [38;2;120;120;120m⇐ src/a.rs[K[0m
+[31mD link[K[0m
+[32mA link2[K[0m

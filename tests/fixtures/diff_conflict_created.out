@@ -1,0 +1,17 @@
+[48;2;40;44;52m[31m× cf.txt[39m[K[0m
+[2m[38;5;1m   1[0m [2m[38;5;2m   1[0m: 1
+[2m[38;5;1m   2[0m [2m[38;5;2m   2[0m: 2
+[2m[38;5;1m   3[0m [2m[38;5;2m   3[0m: 3
+[2m[38;5;1m   4[0m [2m[38;5;2m   4[0m: 4
+[38;5;1m   5[39m [38;5;2m   5[39m: [4m[38;5;1mfive-a[38;5;2m<<<<<<< conflict 1 of 1[24m[39m
+     [38;5;2m   6[39m: [4m[38;5;2m%%%%%%% diff from: qpvuntsm 44946dc9 "first commit with a really long summary line that definitely exceeds seventy-two chars" (parents of rebased revision)[24m[39m
+     [38;5;2m   7[39m: [4m[38;5;2m\\\\\\\        to: kpqxywon 61bc85cb "side1" (rebase destination)[24m[39m
+     [38;5;2m   8[39m: [4m[38;5;2m-5[24m[39m
+     [38;5;2m   9[39m: [4m[38;5;2m+five-a[24m[39m
+     [38;5;2m  10[39m: [4m[38;5;2m+++++++ nkmrtpmo 24d4f098 "created" (rebased revision)[24m[39m
+     [38;5;2m  11[39m: [4m[38;5;2mfive-c[24m[39m
+[38;5;1m   5[39m [38;5;2m  12[39m: [4m[38;5;2m>>>>>>> conflict 1 of 1 ends[24m[39m
+[2m[38;5;1m   6[0m [2m[38;5;2m  13[0m: 6
+[2m[38;5;1m   7[0m [2m[38;5;2m  14[0m: 7
+[2m[38;5;1m   8[0m [2m[38;5;2m  15[0m: 8
+    ...

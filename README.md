@@ -4,7 +4,11 @@ Takes jj output and applies some formatting to it before it goes to the pager.
 
 Features:
 - Use status prefixes (A, M, D, R) also in diff
+- Show renames (R) and copies (C) as `new ⇐ old`, also for `dir/{a => b}/file` paths
+- Mark created/modified conflicts with × and resolved conflicts with ✓
 - Use x (-x) and X (+x) in diff for executable change
+- Show file type changes like `regular file → symlink`
+- Keep the graph prefix of `jj log -p` and pass lines that are not valid UTF-8 through unchanged
 - highlight change ID lines with blueish background to line end
 - highlight filename lines of diff with grey background to line end
 - highlight overlong summary (default to > 50 yellow, > 72 red)
@@ -42,3 +46,14 @@ jj-format [OPTIONS] [PAGER]...
 | `-h`, `--help` | Print help |
 | `-V`, `--version` | Print version |
 | `[PAGER]...` | Pager command and its arguments, e.g. `less -FrfX`. Everything after the first non-option argument is passed to the pager. If omitted, the built-in pager [minus](https://crates.io/crates/minus) is used. |
+
+## Tests
+
+`tests/fixtures/*.in` hold raw `jj --color=always` output and `*.out` the expected formatted output.
+After a jj update regenerate and review them:
+
+```shell
+tests/fixtures/generate.sh
+BLESS=1 cargo test
+jj diff tests/fixtures
+```

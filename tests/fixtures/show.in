@@ -1,0 +1,27 @@
+Commit ID: [38;5;4m0d9666043b916abf64db06d7a1b37726e2e29c7f[39m
+Change ID: [38;5;5mzsuskulnrvyrovkzqrwmxqlsskqntxvp[39m
+Author   : [38;5;3mTest User[39m <[38;5;3mtest@example.com[39m> ([38;5;6m2026-01-01 00:00:00[39m)
+Committer: [38;5;3mTest User[39m <[38;5;3mtest@example.com[39m> ([38;5;6m2026-01-01 00:00:00[39m)
+
+    second
+
+[38;5;3mAdded regular file added.txt:[39m
+     [38;5;2m   1[39m: [4m[38;5;2mnew[24m[39m
+[38;5;3mModified regular file bin.txt:[39m
+[2m[38;5;1m   1[0m [2m[38;5;2m   1[0m: ÿþ latin1 ä
+     [38;5;2m   2[39m: [4m[38;5;2myÿ[24m[39m
+[38;5;3mModified regular file dir with space/f(1).txt:[39m
+[2m[38;5;1m   1[0m [2m[38;5;2m   1[0m: b
+     [38;5;2m   2[39m: [4m[38;5;2mb2[24m[39m
+[38;5;3mExecutable file became non-executable at exe.sh:[39m
+[38;5;3mModified regular file keep.txt:[39m
+[2m[38;5;1m   1[0m [2m[38;5;2m   1[0m: keep
+     [38;5;2m   2[39m: [4m[38;5;2mm[24m[39m
+[38;5;3mModified regular file keep2.txt (keep.txt => keep2.txt):[39m
+[38;5;3mModified regular file lib/a.rs (src/a.rs => lib/a.rs):[39m
+[2m[38;5;1m   1[0m [2m[38;5;2m   1[0m: a
+     [38;5;2m   2[39m: [4m[38;5;2mc[24m[39m
+[38;5;3mRemoved symlink link:[39m
+[38;5;1m   1[39m     : [4m[38;5;1msrc/a.rs[24m[39m
+[38;5;3mAdded symlink link2:[39m
+     [38;5;2m   1[39m: [4m[38;5;2mkeep.txt[24m[39m

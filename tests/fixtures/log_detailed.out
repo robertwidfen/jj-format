@@ -1,0 +1,91 @@
+[48;2;30;44;52m[1m[38;5;1m@[0m[48;2;30;44;52m  Commit ID: [38;5;4mbcf2c3cc80a76eb62af90ebe256090f36c593e0c[39m[K[0m
+│  Change ID: [38;5;5mxznxytknoqwovtvtplynqwpmksnpzzuw[39m
+│  Author   : [38;5;3mTest User[39m <[38;5;3mtest@example.com[39m> ([38;5;6m2026-01-01 00:00:00[39m)
+│  Committer: [38;5;3mTest User[39m <[38;5;3mtest@example.com[39m> ([38;5;6m2026-01-01 00:00:00[39m)
+│
+│  [38;5;3m    (no description set)[39m
+│
+[48;2;30;44;52m│ ○  Commit ID: [38;5;4md5db94daf4ca18ab3fbbb9dff8604c42e35ef529[39m[K[0m
+├─╯  Change ID: [38;5;5mkxryzmorwvtzxoupprvknwtvlqunvrwt[39m
+│    Author   : [38;5;3mTest User[39m <[38;5;3mtest@example.com[39m> ([38;5;6m2026-01-01 00:00:00[39m)
+│    Committer: [38;5;3mTest User[39m <[38;5;3mtest@example.com[39m> ([38;5;6m2026-01-01 00:00:00[39m)
+│
+│        resolve
+│
+[48;2;30;44;52m[1m[38;5;1m×[0m[48;2;30;44;52m  Commit ID: [38;5;4ma0362ee0be06ba0fe95e574484769fc711835c54[39m[K[0m
+│  Change ID: [38;5;5mlylxulplsnywpkoymoszzvuzpotpukzq[39m
+│  Author   : [38;5;3mTest User[39m <[38;5;3mtest@example.com[39m> ([38;5;6m2026-01-01 00:00:00[39m)
+│  Committer: [38;5;3mTest User[39m <[38;5;3mtest@example.com[39m> ([38;5;6m2026-01-01 00:00:00[39m)
+│
+│      modconflict
+│
+[48;2;30;44;52m[1m[38;5;1m×[0m[48;2;30;44;52m    Commit ID: [38;5;4mc9b65248a848bccf6caa541474e43d13f834e7e6[39m[K[0m
+├─╮  Change ID: [38;5;5mwqnwkozpkustnxypnnntnykwrqrkrpvv[39m
+│ │  Author   : [38;5;3mTest User[39m <[38;5;3mtest@example.com[39m> ([38;5;6m2026-01-01 00:00:00[39m)
+│ │  Committer: [38;5;3mTest User[39m <[38;5;3mtest@example.com[39m> ([38;5;6m2026-01-01 00:00:00[39m)
+│ │
+│ │      merge
+│ │
+[48;2;30;44;52m│ ○  Commit ID: [38;5;4m76bc6e0676680d2bab39085099fa6508c10c67f0[39m[K[0m
+│ │  Change ID: [38;5;5mkmkuslswpqwqponmwypxtntswnlvsynl[39m
+│ │  Author   : [38;5;3mTest User[39m <[38;5;3mtest@example.com[39m> ([38;5;6m2026-01-01 00:00:00[39m)
+│ │  Committer: [38;5;3mTest User[39m <[38;5;3mtest@example.com[39m> ([38;5;6m2026-01-01 00:00:00[39m)
+│ │
+│ │      side2
+│ │
+[48;2;30;44;52m│ │ [1m[38;5;1m×[0m[48;2;30;44;52m  Commit ID: [38;5;4mebee07824ea0e1e668e1caff1a436d6300371a93[39m[K[0m
+├───╯  Change ID: [38;5;5mnkmrtpmomlromvvqpowoqtttrorzvqls[39m
+│ │    Author   : [38;5;3mTest User[39m <[38;5;3mtest@example.com[39m> ([38;5;6m2026-01-01 00:00:00[39m)
+│ │    Committer: [38;5;3mTest User[39m <[38;5;3mtest@example.com[39m> ([38;5;6m2026-01-01 00:00:00[39m)
+│ │
+│ │        created
+│ │
+[48;2;30;44;52m○ │  Commit ID: [38;5;4m61bc85cb795bf16a958a7298df49680638e6c694[39m[K[0m
+├─╯  Change ID: [38;5;5mkpqxywonksrltlrkyqukqqsxpltznztk[39m
+│    Author   : [38;5;3mTest User[39m <[38;5;3mtest@example.com[39m> ([38;5;6m2026-01-01 00:00:00[39m)
+│    Committer: [38;5;3mTest User[39m <[38;5;3mtest@example.com[39m> ([38;5;6m2026-01-01 00:00:00[39m)
+│
+│        side1
+│
+[48;2;30;44;52m│ ○  Commit ID: [38;5;4m9019417231b815aca339aa72d48904d9b454b153[39m[K[0m
+│ │  Change ID: [38;5;5myostqsxwqrltovqlrlzszywzslusmuup[39m
+│ │  Author   : [38;5;3mTest User[39m <[38;5;3mtest@example.com[39m> ([38;5;6m2026-01-01 00:00:00[39m)
+│ │  Committer: [38;5;3mTest User[39m <[38;5;3mtest@example.com[39m> ([38;5;6m2026-01-01 00:00:00[39m)
+│ │
+│ │      mv
+│ │
+[48;2;30;44;52m│ ○  Commit ID: [38;5;4m13072f0af07a57822534a8fde3d83ec7db76bd57[39m[K[0m
+│ │  Change ID: [38;5;5myqosqzytrlswkspswpqrmlplxylrzsnz[39m
+│ │  Author   : [38;5;3mTest User[39m <[38;5;3mtest@example.com[39m> ([38;5;6m2026-01-01 00:00:00[39m)
+│ │  Committer: [38;5;3mTest User[39m <[38;5;3mtest@example.com[39m> ([38;5;6m2026-01-01 00:00:00[39m)
+│ │
+│ │      moves
+│ │
+[48;2;30;44;52m│ ○  Commit ID: [38;5;4mf94896925530852dd2878bea64e3ca8300963b8a[39m[K[0m
+│ │  Change ID: [38;5;5mroyxmykxtrkrqppotnrvutxlvrvqyxmy[39m
+│ │  Author   : [38;5;3mTest User[39m <[38;5;3mtest@example.com[39m> ([38;5;6m2026-01-01 00:00:00[39m)
+│ │  Committer: [38;5;3mTest User[39m <[38;5;3mtest@example.com[39m> ([38;5;6m2026-01-01 00:00:00[39m)
+│ │
+│ │      typechange
+│ │
+[48;2;30;44;52m│ ○  Commit ID: [38;5;4m0d9666043b916abf64db06d7a1b37726e2e29c7f[39m[K[0m
+├─╯  Change ID: [38;5;5mzsuskulnrvyrovkzqrwmxqlsskqntxvp[39m
+│    Author   : [38;5;3mTest User[39m <[38;5;3mtest@example.com[39m> ([38;5;6m2026-01-01 00:00:00[39m)
+│    Committer: [38;5;3mTest User[39m <[38;5;3mtest@example.com[39m> ([38;5;6m2026-01-01 00:00:00[39m)
+│
+│        second
+│
+[48;2;30;44;52m○  Commit ID: [38;5;4m44946dc9bad8282fac65476de4394cc540094729[39m[K[0m
+│  Change ID: [38;5;5mqpvuntsmwlqtpsluzzsnyyzlmlwvmlnu[39m
+│  Author   : [38;5;3mTest User[39m <[38;5;3mtest@example.com[39m> ([38;5;6m2026-01-01 00:00:00[39m)
+│  Committer: [38;5;3mTest User[39m <[38;5;3mtest@example.com[39m> ([38;5;6m2026-01-01 00:00:00[39m)
+│
+│      first commit with a really long summary line that definitely exceeds seventy-two chars
+│
+[48;2;30;44;52m[1m[38;5;14m◆[0m[48;2;30;44;52m  Commit ID: [38;5;4m0000000000000000000000000000000000000000[39m[K[0m
+   Change ID: [38;5;5mzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz[39m
+   Author   : [38;5;1m(no name set)[39m <[38;5;1m(no email set)[39m> ([38;5;6m1970-01-01 00:00:00[39m)
+   Committer: [38;5;1m(no name set)[39m <[38;5;1m(no email set)[39m> ([38;5;6m1970-01-01 00:00:00[39m)
+
+   [38;5;2m    (no description set)[39m
+

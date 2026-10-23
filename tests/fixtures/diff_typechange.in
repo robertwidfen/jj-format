@@ -1,0 +1,6 @@
+[38;5;3mNon-executable file became executable at added.txt:[39m
+[38;5;3mRegular file became symlink at exe.sh:[39m
+[38;5;1m   1[39m     : [4m[38;5;1mx[24m[39m
+     [38;5;2m   1[39m: [4m[38;5;2mkeep.txt[24m[39m
+[38;5;3mSymlink became regular file at link2:[39m
+[38;5;1m   1[39m [38;5;2m   1[39m: [4m[38;5;1mkeep.txt[38;5;2mf[24m[39m
