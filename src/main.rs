@@ -43,14 +43,44 @@ const RESET_FG: &str = "\u{1b}[39m";
 // make background to go to end of line
 const CLEAR_LINE: &str = "\u{1b}[K";
 
-// marks for conflicts, C and R are taken by copies and renames
-const CONFLICT: &str = "×";
-const RESOLVED: &str = "✓";
+/// Kinds of file changes; each one has the same mark and color in all output formats
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum FileChange {
+    Added,
+    Deleted,
+    Modified,
+    Renamed,
+    Copied,
+    Untracked,
+    ExecutableSet,
+    ExecutableUnset,
+    Conflict,
+    Resolved,
+}
+
+impl FileChange {
+    /// Returns (color, mark)
+    fn style(self) -> (&'static str, &'static str) {
+        match self {
+            FileChange::Added => (GREEN, "A"),
+            FileChange::Deleted => (RED, "D"),
+            FileChange::Modified => (BLUE, "M"),
+            FileChange::Renamed => (MAGENTA, "R"),
+            FileChange::Copied => (GREEN, "C"),
+            FileChange::Untracked => (MAGENTA, "?"),
+            FileChange::ExecutableSet => (BLUE, "X"),
+            FileChange::ExecutableUnset => (BLUE, "x"),
+            // C and R are taken by copies and renames
+            FileChange::Conflict => (RED, "×"),
+            FileChange::Resolved => (GREEN, "✓"),
+        }
+    }
+}
 
 #[derive(Parser, Debug)]
 #[command(version, about)]
 struct Args {
-    /// Print the jj command and diagnostic information
+    /// Print in front of each line the rule that formatted it
     #[arg(short, long, default_value_t = false)]
     test: bool,
 
@@ -363,7 +393,7 @@ impl Formatter {
             buf.clear();
             if input.read_until(b'\n', &mut buf)? == 0 {
                 if let Some(git) = state.git.take() {
-                    writeln!(out, "{}", git.format())?;
+                    self.write_git(out, &git)?;
                 }
                 return Ok(());
             }
@@ -376,7 +406,7 @@ impl Formatter {
                     git.add(&captures);
                     continue;
                 }
-                writeln!(out, "{}", git.format())?;
+                self.write_git(out, git)?;
                 state.git = None;
             }
             if let Some(captures) = text.and_then(|line| self.re_git_header.captures(line)) {
@@ -385,8 +415,12 @@ impl Formatter {
             }
 
             match text.and_then(|line| self.format_line(line, &mut state)) {
-                Some(line) => writeln!(out, "{line}")?,
+                Some((rule, line)) => {
+                    self.write_rule(out, rule)?;
+                    writeln!(out, "{line}")?
+                }
                 None => {
+                    self.write_rule(out, "")?;
                     out.write_all(&buf)?;
                     if !buf.ends_with(b"\n") {
                         out.write_all(b"\n")?;
@@ -396,15 +430,31 @@ impl Formatter {
         }
     }
 
-    /// Returns the formatted line or None if the line should be kept as it is
-    fn format_line(&self, line: &str, state: &mut State) -> Option<String> {
+    /// In test mode writes the name of the rule that formatted the following line
+    fn write_rule(&self, out: &mut dyn Write, rule: &str) -> io::Result<()> {
+        if self.test {
+            write!(out, "{LIGHT_GRAY}{rule:>12} │{RESET} ")?;
+        }
+        Ok(())
+    }
+
+    fn write_git(&self, out: &mut dyn Write, git: &GitHeader) -> io::Result<()> {
+        for line in git.format() {
+            self.write_rule(out, "git")?;
+            writeln!(out, "{line}")?;
+        }
+        Ok(())
+    }
+
+    /// Returns the name of the matching rule and the formatted line, or None if the line should be kept as it is
+    fn format_line(&self, line: &str, state: &mut State) -> Option<(&'static str, String)> {
         match std::mem::take(&mut state.description) {
             Description::NextLine => {
                 if let Some(captures) = self.re_description.captures(line) {
                     let summary = captures.name("summary")?;
                     let mut line = line.to_string();
                     line.replace_range(summary.range(), &self.highlight_summary(summary.as_str()));
-                    return Some(line);
+                    return Some(("description", line));
                 }
             }
             Description::AfterBlank if self.re_graph_only.is_match(line) => {
@@ -415,22 +465,17 @@ impl Formatter {
         }
 
         if let Some(captures) = self.re_diff.captures(line) {
-            Some(format_diff_header(&captures))
+            Some(("diff", format_diff_header(&captures)))
         } else if let Some(captures) = self.re_conflict.captures(line) {
             let prefix = get(&captures, "prefix");
-            let path = normalize_path(get(&captures, "path"));
-            let description = get(&captures, "description");
-            Some(format!(
-                "{prefix}{RED}{CONFLICT} {path}{RESET} {description}{CLEAR_LINE}{RESET}"
-            ))
+            let path = get(&captures, "path");
+            let description = format!("{RESET_FG} {}", get(&captures, "description"));
+            let line = format_path_line(prefix, FileChange::Conflict, path, &description);
+            Some(("conflict", line))
         } else if let Some(captures) = self.re_status.captures(line) {
-            let status = get(&captures, "status");
-            if self.test {
-                println!("status: {:?} {:?}", status, get(&captures, "path"));
-            }
-            Some(format_status(&captures))
+            Some(("status", format_status(&captures)))
         } else if let Some(captures) = self.re_types.captures(line) {
-            Some(format_types(&captures))
+            Some(("types", format_types(&captures)))
         } else if let Some(captures) = self.re_change.captures(line) {
             let mut line = line.to_string();
             match captures.name("summary") {
@@ -440,9 +485,11 @@ impl Formatter {
                 // the default log template prints the description in the next line
                 None => state.description = Description::NextLine,
             }
-            Some(self.highlight_line(&line))
-        } else if self.re_commit_id.is_match(line) || self.re_working_copy.is_match(line) {
-            Some(self.highlight_line(line))
+            Some(("change", self.highlight_line(&line)))
+        } else if self.re_commit_id.is_match(line) {
+            Some(("commit id", self.highlight_line(line)))
+        } else if self.re_working_copy.is_match(line) {
+            Some(("working copy", self.highlight_line(line)))
         } else {
             if self.re_committer.is_match(line) {
                 state.description = Description::AfterBlank;
@@ -479,39 +526,40 @@ impl Formatter {
 }
 
 /// Formats the header line of a file in a diff, e.g. `M path`
-fn file_header(prefix: &str, color: &str, mark: &str, path: &str, suffix: &str) -> String {
+fn file_header(prefix: &str, change: FileChange, path: &str, suffix: &str) -> String {
+    let (color, mark) = change.style();
     format!("{prefix}{BG_GREY}{color}{mark} {path}{RESET_FG}{suffix}{CLEAR_LINE}{RESET}")
 }
 
 /// Formats a file header of a color-words diff
 fn format_diff_header(captures: &Captures) -> String {
     let prefix = get(captures, "prefix");
-    let header = |color: &str, mark: &str, path: &str, suffix: &str| {
-        file_header(prefix, color, mark, path, suffix)
+    let header = |change: FileChange, path: &str, suffix: &str| {
+        file_header(prefix, change, &normalize_path(path), suffix)
     };
 
     if let Some(path) = captures.name("conflict_path") {
-        let path = normalize_path(path.as_str());
         return match get(captures, "conflict_op") {
-            "Resolved" => header(GREEN, RESOLVED, &path, ""),
-            _ => header(RED, CONFLICT, &path, ""),
+            "Resolved" => header(FileChange::Resolved, path.as_str(), ""),
+            _ => header(FileChange::Conflict, path.as_str(), ""),
         };
     }
     if let Some(path) = captures.name("became_path") {
-        let path = normalize_path(path.as_str());
+        let path = path.as_str();
         return match (get(captures, "from"), get(captures, "to")) {
-            ("Executable file", "non-executable") => header(BLUE, "x", &path, " -x"),
-            ("Non-executable file", "executable") => header(BLUE, "X", &path, " +x"),
+            ("Executable file", "non-executable") => {
+                header(FileChange::ExecutableUnset, path, " -x")
+            }
+            ("Non-executable file", "executable") => header(FileChange::ExecutableSet, path, " +x"),
             (from, to) => header(
-                BLUE,
-                "M",
-                &path,
+                FileChange::Modified,
+                path,
                 &format!(" {LIGHT_GRAY}{} → {to}", from.to_lowercase()),
             ),
         };
     }
     if let Some(path) = captures.name("special_path") {
-        return header(BLUE, "M", path.as_str(), "");
+        return header(FileChange::Modified, path.as_str(), "");
     }
 
     let op = get(captures, "op");
@@ -519,19 +567,17 @@ fn format_diff_header(captures: &Captures) -> String {
     {
         // jj prints copies the same way as renames, so they can't be told apart here
         let old_path = normalize_path(old_path.as_str());
-        let new_path = normalize_path(new_path.as_str());
         return header(
-            MAGENTA,
-            "R",
-            &new_path,
+            FileChange::Renamed,
+            new_path.as_str(),
             &format!(" {LIGHT_GRAY}⇐ {old_path}"),
         );
     }
-    let path = normalize_path(get(captures, "path"));
-    let (color, mark, sign) = match op {
-        "Added" => (GREEN, "A", "+"),
-        "Removed" => (RED, "D", "-"),
-        _ => (BLUE, "M", ""),
+    let path = get(captures, "path");
+    let (change, sign) = match op {
+        "Added" => (FileChange::Added, "+"),
+        "Removed" => (FileChange::Deleted, "-"),
+        _ => (FileChange::Modified, ""),
     };
     let suffix = match get(captures, "type") {
         "regular file" => String::new(),
@@ -540,7 +586,7 @@ fn format_diff_header(captures: &Captures) -> String {
         "symlink" => " ->".to_string(),
         other => format!(" {LIGHT_GRAY}({other})"),
     };
-    header(color, mark, &path, &suffix)
+    header(change, path, &suffix)
 }
 
 /// The header of a file in a git diff: the `diff --git` line and the extended header lines after it
@@ -553,8 +599,8 @@ struct GitHeader {
     new_mode: Option<String>,
     added: bool,
     deleted: bool,
-    /// (old, new, is copy) of a rename or copy
-    moved: Option<(String, String, bool)>,
+    /// old and new path of a rename or copy
+    moved: Option<(String, String, FileChange)>,
 }
 
 impl GitHeader {
@@ -578,9 +624,8 @@ impl GitHeader {
             "deleted file mode" => (self.deleted, self.old_mode) = (true, Some(value)),
             "old mode" => self.old_mode = Some(value),
             "new mode" => self.new_mode = Some(value),
-            key @ ("rename from" | "copy from") => {
-                self.moved = Some((value, String::new(), key == "copy from"))
-            }
+            "rename from" => self.moved = Some((value, String::new(), FileChange::Renamed)),
+            "copy from" => self.moved = Some((value, String::new(), FileChange::Copied)),
             "rename to" | "copy to" => {
                 if let Some((_, new, _)) = &mut self.moved {
                     *new = value;
@@ -594,11 +639,10 @@ impl GitHeader {
             .push(format!("{prefix}{LIGHT_GRAY}{line}{RESET}"));
     }
 
-    /// Formats the `diff --git` line like a color-words header followed by the dimmed extended header lines
-    fn format(&self) -> String {
-        let prefix = &self.prefix;
-        let header = |color: &str, mark: &str, path: &str, suffix: &str| {
-            file_header(prefix, color, mark, &normalize_path(path), suffix)
+    /// Formats the `diff --git` line like a color-words header, followed by the dimmed extended header lines
+    fn format(&self) -> Vec<String> {
+        let header = |change: FileChange, path: &str, suffix: &str| {
+            file_header(&self.prefix, change, &normalize_path(path), suffix)
         };
         let (old_path, new_path) = split_git_paths(&self.paths);
         let mode_suffix = |sign: &str, mode: &Option<String>| match mode.as_deref() {
@@ -606,31 +650,41 @@ impl GitHeader {
             Some("120000") => " ->".to_string(),
             _ => String::new(),
         };
-        let mut lines = vec![match (
+        let header_line = match (
             &self.moved,
             self.old_mode.as_deref(),
             self.new_mode.as_deref(),
         ) {
-            (Some((old, new, is_copy)), _, _) => {
-                let (color, mark) = if *is_copy {
-                    (GREEN, "C")
-                } else {
-                    (MAGENTA, "R")
-                };
+            (Some((old, new, change)), _, _) => {
                 let old = normalize_path(old);
-                header(color, mark, new, &format!(" {LIGHT_GRAY}⇐ {old}"))
+                header(*change, new, &format!(" {LIGHT_GRAY}⇐ {old}"))
             }
-            _ if self.added => header(GREEN, "A", &new_path, &mode_suffix("+", &self.new_mode)),
-            _ if self.deleted => header(RED, "D", &old_path, &mode_suffix("-", &self.old_mode)),
-            (None, Some("100755"), Some("100644")) => header(BLUE, "x", &new_path, " -x"),
-            (None, Some("100644"), Some("100755")) => header(BLUE, "X", &new_path, " +x"),
-            (None, Some(old), Some(new)) => {
-                header(BLUE, "M", &new_path, &format!(" {LIGHT_GRAY}{old} → {new}"))
+            _ if self.added => header(
+                FileChange::Added,
+                &new_path,
+                &mode_suffix("+", &self.new_mode),
+            ),
+            _ if self.deleted => header(
+                FileChange::Deleted,
+                &old_path,
+                &mode_suffix("-", &self.old_mode),
+            ),
+            (None, Some("100755"), Some("100644")) => {
+                header(FileChange::ExecutableUnset, &new_path, " -x")
             }
-            _ => header(BLUE, "M", &new_path, ""),
-        }];
-        lines.extend(self.lines.iter().cloned());
-        lines.join("\n")
+            (None, Some("100644"), Some("100755")) => {
+                header(FileChange::ExecutableSet, &new_path, " +x")
+            }
+            (None, Some(old), Some(new)) => header(
+                FileChange::Modified,
+                &new_path,
+                &format!(" {LIGHT_GRAY}{old} → {new}"),
+            ),
+            _ => header(FileChange::Modified, &new_path, ""),
+        };
+        std::iter::once(header_line)
+            .chain(self.lines.iter().cloned())
+            .collect()
     }
 }
 
@@ -656,39 +710,38 @@ fn split_git_paths(paths: &str) -> (String, String) {
 
 /// Formats a line of `jj status` or `jj diff --summary`
 fn format_status(captures: &Captures) -> String {
-    let prefix = get(captures, "prefix");
-    let path = get(captures, "path");
-    let (color, mark) = match get(captures, "status") {
-        "A" => (GREEN, "A"),
-        "D" => (RED, "D"),
-        "R" => (MAGENTA, "R"),
-        "C" => (GREEN, "C"),
-        "?" => (MAGENTA, "?"),
-        _ => (BLUE, "M"),
+    let change = match get(captures, "status") {
+        "A" => FileChange::Added,
+        "D" => FileChange::Deleted,
+        "R" => FileChange::Renamed,
+        "C" => FileChange::Copied,
+        "?" => FileChange::Untracked,
+        _ => FileChange::Modified,
     };
-    format_path_line(prefix, color, mark, path, "")
+    format_path_line(get(captures, "prefix"), change, get(captures, "path"), "")
 }
 
 /// Formats a line of `jj diff --types`, e.g. `FL path` (regular file became symlink)
 fn format_types(captures: &Captures) -> String {
-    let prefix = get(captures, "prefix");
     let path = get(captures, "path");
     let types = get(captures, "types");
-    let (color, mark) = if expand_braces(path).is_some() {
+    let change = if expand_braces(path).is_some() {
         // like in color-words diffs copies and renames look the same
-        (MAGENTA, "R")
+        FileChange::Renamed
     } else if types.starts_with('-') {
-        (GREEN, "A")
+        FileChange::Added
     } else if types.ends_with('-') {
-        (RED, "D")
+        FileChange::Deleted
     } else {
-        (BLUE, "M")
+        FileChange::Modified
     };
-    format_path_line(prefix, color, mark, path, &format!(" {LIGHT_GRAY}{types}"))
+    let suffix = format!(" {LIGHT_GRAY}{types}");
+    format_path_line(get(captures, "prefix"), change, path, &suffix)
 }
 
 /// Formats `mark path`, a path like `a/{b => c}/x` as `mark a/c/x ⇐ a/b/x`
-fn format_path_line(prefix: &str, color: &str, mark: &str, path: &str, suffix: &str) -> String {
+fn format_path_line(prefix: &str, change: FileChange, path: &str, suffix: &str) -> String {
+    let (color, mark) = change.style();
     match expand_braces(path) {
         Some((old_path, new_path)) => {
             let old_path = normalize_path(&old_path);
@@ -841,7 +894,7 @@ mod tests {
     fn format_plain(line: &str) -> Option<String> {
         formatter()
             .format_line(&replace_esc(line), &mut State::default())
-            .map(|l| plain(&l))
+            .map(|(_, l)| plain(&l))
     }
 
     #[test]
@@ -1001,7 +1054,8 @@ mod tests {
         let line = replace_esc(&format!("○    7 ESC[1mESC[38;5;5mkmzESC[0m  {summary}"));
         let formatted = formatter()
             .format_line(&line, &mut State::default())
-            .unwrap();
+            .unwrap()
+            .1;
         assert_eq!(plain(&formatted), plain(&line));
         // the 51st character starts the warning, the 73rd the error
         let (ok, rest) = summary.split_at(50);
@@ -1012,7 +1066,8 @@ mod tests {
         let line = replace_esc("@  1 ESC[1mESC[38;5;5mmESC[0m    m");
         let formatted = Formatter::new(0, 72, false)
             .format_line(&line, &mut State::default())
-            .unwrap();
+            .unwrap()
+            .1;
         assert!(formatted.contains("\u{1b}[38;5;5mm\u{1b}[0m"));
         assert!(formatted.contains(&format!("{RESET}{BG_BLUE}    {YELLOW}m")));
     }
@@ -1037,7 +1092,8 @@ mod tests {
             let line = replace_esc(line);
             let formatted = formatter()
                 .format_line(&line, &mut State::default())
-                .expect(&line);
+                .expect(&line)
+                .1;
             assert!(formatted.starts_with(BG_BLUE), "{line}");
             assert_eq!(plain(&formatted), plain(&line));
         }
@@ -1182,6 +1238,25 @@ mod tests {
                 assert_eq!(lines, expected, "{input}");
             }
         }
+    }
+
+    #[test]
+    fn test_rules_in_test_mode() {
+        let lines = format_lines(
+            &Formatter::new(50, 72, true),
+            "plain\nESC[38;5;2mA a.txtESC[39m\nESC[1mdiff --git a/x b/xESC[0m\nESC[1mindex 1..2 100644ESC[0m\nlast",
+        );
+        let lines: Vec<_> = lines.iter().map(|l| plain(l)).collect();
+        assert_eq!(
+            lines,
+            [
+                "             │ plain",
+                "      status │ A a.txt",
+                "         git │ M x",
+                "         git │ index 1..2 100644",
+                "             │ last",
+            ]
+        );
     }
 
     #[test]
