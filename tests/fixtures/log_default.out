@@ -21,5 +21,5 @@
 [48;2;30;44;52m│ ○  [1m[38;5;5mzs[0m[48;2;30;44;52m[38;5;8muskuln[39m [38;5;3mtest@example.com[39m [38;5;6m2026-01-01 00:00:00[39m [1m[38;5;4m0d[0m[48;2;30;44;52m[38;5;8m966604[39m[K[0m
 ├─╯  second
 [48;2;30;44;52m○  [1m[38;5;5mq[0m[48;2;30;44;52m[38;5;8mpvuntsm[39m [38;5;3mtest@example.com[39m [38;5;6m2026-01-01 00:00:00[39m [1m[38;5;4m4[0m[48;2;30;44;52m[38;5;8m4946dc9[39m[K[0m
-│  first commit with a really long summary line that definitely exceeds seventy-two chars
+│  first commit with a really long summary line that [33mdefinitely exceeds sev[31menty-two chars[39m
 [48;2;30;44;52m[1m[38;5;14m◆[0m[48;2;30;44;52m  [1m[38;5;5mzz[0m[48;2;30;44;52m[38;5;8mzzzzzz[39m [38;5;2mroot()[39m [1m[38;5;4m00[0m[48;2;30;44;52m[38;5;8m000000[39m[K[0m

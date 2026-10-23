@@ -120,6 +120,8 @@ dump log_short --config "$short_log" log -r 'all()' -T short_log --reversed
 dump log_default log -r 'all()'
 dump log_detailed log -r 'all()' -T builtin_log_detailed
 dump log_patch log -r "$second|$modconflict" -p --summary
+dump log_patch_git log -r "$second" -p --git
+dump log_ascii --config ui.graph.style=ascii log -r 'all()'
 dump show show -r "$second"
 dump interdiff interdiff --from "$mv_change" --to "$mv_change-"
 dump evolog evolog -r "$second"

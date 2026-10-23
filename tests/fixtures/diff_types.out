@@ -1,9 +1,9 @@
-[38;5;6m-F added.txt[39m
-[38;5;6mFF bin.txt[39m
-[38;5;6mFF dir with space/f(1).txt[39m
-[38;5;6mFF exe.sh[39m
-[38;5;6mFF keep.txt[39m
-[38;5;6mFF {keep.txt => keep2.txt}[39m
-[38;5;6mFF {src => lib}/a.rs[39m
-[38;5;6mL- link[39m
-[38;5;6m-L link2[39m
+[32mA added.txt [38;2;120;120;120m-F[K[0m
+[34mM bin.txt [38;2;120;120;120mFF[K[0m
+[34mM dir with space/f(1).txt [38;2;120;120;120mFF[K[0m
+[34mM exe.sh [38;2;120;120;120mFF[K[0m
+[34mM keep.txt [38;2;120;120;120mFF[K[0m
+[35mR keep2.txt [38;2;120;120;120m⇐ keep.txt [38;2;120;120;120mFF[K[0m
+[35mR lib/a.rs [38;2;120;120;120m⇐ src/a.rs [38;2;120;120;120mFF[K[0m
+[31mD link [38;2;120;120;120mL-[K[0m
+[32mA link2 [38;2;120;120;120m-L[K[0m

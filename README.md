@@ -8,6 +8,10 @@ Features:
 - Mark created/modified conflicts with × and resolved conflicts with ✓
 - Use x (-x) and X (+x) in diff for executable change
 - Show file type changes like `regular file → symlink`
+- Same file headers for `--git` diffs (extended header lines dimmed) and for `--types` (`A`, `D`, `M`, `R` plus the types)
+- highlight `Commit ID:` lines also in `jj show`, and the working copy/parent lines of `jj status`
+- Check the summary length also when the description is in its own line (default and detailed log, `jj show`)
+- Support `ui.graph.style = "ascii"`
 - Keep the graph prefix of `jj log -p` and pass lines that are not valid UTF-8 through unchanged
 - highlight change ID lines with blueish background to line end
 - highlight filename lines of diff with grey background to line end

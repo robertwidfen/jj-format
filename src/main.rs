@@ -2,19 +2,21 @@ use clap::Parser;
 use crossterm::event::{Event, KeyCode, KeyModifiers};
 use crossterm::{event::DisableMouseCapture, execute};
 use regex::{Captures, Regex};
+use std::borrow::Cow;
 use std::cmp::Reverse;
 use std::io::stdout;
 use std::io::{self, BufRead, Write};
 use std::process::{Command, ExitCode, Stdio};
 
+// both variants return the same type, so code type checked on one platform also compiles on the other
 #[cfg(windows)]
-fn normalize_path(path: &str) -> String {
-    path.replace('\\', "/")
+fn normalize_path(path: &str) -> Cow<'_, str> {
+    Cow::Owned(path.replace('\\', "/"))
 }
 
 #[cfg(not(windows))]
-fn normalize_path(path: &str) -> &str {
-    path
+fn normalize_path(path: &str) -> Cow<'_, str> {
+    Cow::Borrowed(path)
 }
 
 const RED: &str = "\u{1b}[31m";
@@ -296,13 +298,39 @@ fn run_minus(args: &Args, buffer: &[u8]) -> io::Result<()> {
 struct Formatter {
     re_diff: Regex,
     re_status: Regex,
+    re_types: Regex,
     re_conflict: Regex,
     re_change: Regex,
     re_commit_id: Regex,
+    re_working_copy: Regex,
+    re_committer: Regex,
+    re_graph_only: Regex,
+    re_description: Regex,
+    re_git_header: Regex,
+    re_git_meta: Regex,
     re_reset: Regex,
     summary_warning_len: usize,
     summary_error_len: usize,
     test: bool,
+}
+
+/// What the formatter remembers between lines
+#[derive(Default)]
+struct State {
+    description: Description,
+    /// the header of a git diff is collected until its first line that is not a header line
+    git: Option<GitHeader>,
+}
+
+/// Where the first line of a description is expected
+#[derive(Default, Clone, Copy, PartialEq, Debug)]
+enum Description {
+    #[default]
+    None,
+    /// in the next line, after a log line without summary
+    NextLine,
+    /// after the next blank line, after the `Committer:` line of a detailed log or `jj show`
+    AfterBlank,
 }
 
 impl Formatter {
@@ -310,9 +338,16 @@ impl Formatter {
         Formatter {
             re_diff: make_re(RE_DIFF),
             re_status: make_re(RE_STATUS),
+            re_types: make_re(RE_TYPES),
             re_conflict: make_re(RE_CONFLICT),
             re_change: make_re(RE_CHANGE),
             re_commit_id: make_re(RE_COMMIT_ID),
+            re_working_copy: make_re(RE_WORKING_COPY),
+            re_committer: make_re(RE_COMMITTER),
+            re_graph_only: make_re("^GRAPH$"),
+            re_description: make_re(RE_DESCRIPTION),
+            re_git_header: make_re(RE_GIT_HEADER),
+            re_git_meta: make_re(RE_GIT_META),
             re_reset: Regex::new(r"\u{1b}\[0m").unwrap(),
             summary_warning_len,
             summary_error_len,
@@ -322,18 +357,34 @@ impl Formatter {
 
     /// Formats `input` line by line into `out`; lines that are not valid UTF-8 are copied byte for byte
     fn format_stream(&self, mut input: impl BufRead, out: &mut dyn Write) -> io::Result<()> {
+        let mut state = State::default();
         let mut buf = Vec::new();
         loop {
             buf.clear();
             if input.read_until(b'\n', &mut buf)? == 0 {
+                if let Some(git) = state.git.take() {
+                    writeln!(out, "{}", git.format())?;
+                }
                 return Ok(());
             }
             let content = buf.strip_suffix(b"\n").unwrap_or(&buf);
             let content = content.strip_suffix(b"\r").unwrap_or(content);
-            match std::str::from_utf8(content)
-                .ok()
-                .and_then(|line| self.format_line(line))
-            {
+            let text = std::str::from_utf8(content).ok();
+
+            if let Some(git) = &mut state.git {
+                if let Some(captures) = text.and_then(|line| self.re_git_meta.captures(line)) {
+                    git.add(&captures);
+                    continue;
+                }
+                writeln!(out, "{}", git.format())?;
+                state.git = None;
+            }
+            if let Some(captures) = text.and_then(|line| self.re_git_header.captures(line)) {
+                state.git = Some(GitHeader::new(&captures));
+                continue;
+            }
+
+            match text.and_then(|line| self.format_line(line, &mut state)) {
                 Some(line) => writeln!(out, "{line}")?,
                 None => {
                     out.write_all(&buf)?;
@@ -346,7 +397,23 @@ impl Formatter {
     }
 
     /// Returns the formatted line or None if the line should be kept as it is
-    fn format_line(&self, line: &str) -> Option<String> {
+    fn format_line(&self, line: &str, state: &mut State) -> Option<String> {
+        match std::mem::take(&mut state.description) {
+            Description::NextLine => {
+                if let Some(captures) = self.re_description.captures(line) {
+                    let summary = captures.name("summary")?;
+                    let mut line = line.to_string();
+                    line.replace_range(summary.range(), &self.highlight_summary(summary.as_str()));
+                    return Some(line);
+                }
+            }
+            Description::AfterBlank if self.re_graph_only.is_match(line) => {
+                state.description = Description::NextLine;
+                return None;
+            }
+            _ => {}
+        }
+
         if let Some(captures) = self.re_diff.captures(line) {
             Some(format_diff_header(&captures))
         } else if let Some(captures) = self.re_conflict.captures(line) {
@@ -362,21 +429,32 @@ impl Formatter {
                 println!("status: {:?} {:?}", status, get(&captures, "path"));
             }
             Some(format_status(&captures))
+        } else if let Some(captures) = self.re_types.captures(line) {
+            Some(format_types(&captures))
         } else if let Some(captures) = self.re_change.captures(line) {
             let mut line = line.to_string();
-            if let Some(summary) = captures.name("summary") {
-                line.replace_range(summary.range(), &self.highlight_summary(summary.as_str()));
+            match captures.name("summary") {
+                Some(summary) => {
+                    line.replace_range(summary.range(), &self.highlight_summary(summary.as_str()))
+                }
+                // the default log template prints the description in the next line
+                None => state.description = Description::NextLine,
             }
-            let line = self
-                .re_reset
-                .replace_all(&line, format!("{RESET}{BG_BLUE}"));
-            Some(format!("{BG_BLUE}{line}{CLEAR_LINE}{RESET}"))
-        } else if self.re_commit_id.is_match(line) {
-            let line = self.re_reset.replace_all(line, format!("{RESET}{BG_BLUE}"));
-            Some(format!("{BG_BLUE}{line}{CLEAR_LINE}{RESET}"))
+            Some(self.highlight_line(&line))
+        } else if self.re_commit_id.is_match(line) || self.re_working_copy.is_match(line) {
+            Some(self.highlight_line(line))
         } else {
+            if self.re_committer.is_match(line) {
+                state.description = Description::AfterBlank;
+            }
             None
         }
+    }
+
+    /// Gives the line a blue background up to the end of the terminal row
+    fn highlight_line(&self, line: &str) -> String {
+        let line = self.re_reset.replace_all(line, format!("{RESET}{BG_BLUE}"));
+        format!("{BG_BLUE}{line}{CLEAR_LINE}{RESET}")
     }
 
     /// Colors the characters of the summary beyond the warning and error length
@@ -393,33 +471,41 @@ impl Formatter {
                 highlighted.insert_str(i, color);
             }
         }
+        if highlighted.len() != summary.len() {
+            highlighted.push_str(RESET_FG);
+        }
         highlighted
     }
+}
+
+/// Formats the header line of a file in a diff, e.g. `M path`
+fn file_header(prefix: &str, color: &str, mark: &str, path: &str, suffix: &str) -> String {
+    format!("{prefix}{BG_GREY}{color}{mark} {path}{RESET_FG}{suffix}{CLEAR_LINE}{RESET}")
 }
 
 /// Formats a file header of a color-words diff
 fn format_diff_header(captures: &Captures) -> String {
     let prefix = get(captures, "prefix");
     let header = |color: &str, mark: &str, path: &str, suffix: &str| {
-        format!("{prefix}{BG_GREY}{color}{mark} {path}{RESET_FG}{suffix}{CLEAR_LINE}{RESET}")
+        file_header(prefix, color, mark, path, suffix)
     };
 
     if let Some(path) = captures.name("conflict_path") {
         let path = normalize_path(path.as_str());
         return match get(captures, "conflict_op") {
-            "Resolved" => header(GREEN, RESOLVED, path, ""),
-            _ => header(RED, CONFLICT, path, ""),
+            "Resolved" => header(GREEN, RESOLVED, &path, ""),
+            _ => header(RED, CONFLICT, &path, ""),
         };
     }
     if let Some(path) = captures.name("became_path") {
         let path = normalize_path(path.as_str());
         return match (get(captures, "from"), get(captures, "to")) {
-            ("Executable file", "non-executable") => header(BLUE, "x", path, " -x"),
-            ("Non-executable file", "executable") => header(BLUE, "X", path, " +x"),
+            ("Executable file", "non-executable") => header(BLUE, "x", &path, " -x"),
+            ("Non-executable file", "executable") => header(BLUE, "X", &path, " +x"),
             (from, to) => header(
                 BLUE,
                 "M",
-                path,
+                &path,
                 &format!(" {LIGHT_GRAY}{} → {to}", from.to_lowercase()),
             ),
         };
@@ -437,7 +523,7 @@ fn format_diff_header(captures: &Captures) -> String {
         return header(
             MAGENTA,
             "R",
-            new_path,
+            &new_path,
             &format!(" {LIGHT_GRAY}⇐ {old_path}"),
         );
     }
@@ -454,7 +540,118 @@ fn format_diff_header(captures: &Captures) -> String {
         "symlink" => " ->".to_string(),
         other => format!(" {LIGHT_GRAY}({other})"),
     };
-    header(color, mark, path, &suffix)
+    header(color, mark, &path, &suffix)
+}
+
+/// The header of a file in a git diff: the `diff --git` line and the extended header lines after it
+struct GitHeader {
+    prefix: String,
+    paths: String,
+    /// extended header lines, e.g. `new file mode 100644`, also `---` and `+++`
+    lines: Vec<String>,
+    old_mode: Option<String>,
+    new_mode: Option<String>,
+    added: bool,
+    deleted: bool,
+    /// (old, new, is copy) of a rename or copy
+    moved: Option<(String, String, bool)>,
+}
+
+impl GitHeader {
+    fn new(captures: &Captures) -> Self {
+        GitHeader {
+            prefix: get(captures, "prefix").to_string(),
+            paths: get(captures, "paths").to_string(),
+            lines: Vec::new(),
+            old_mode: None,
+            new_mode: None,
+            added: false,
+            deleted: false,
+            moved: None,
+        }
+    }
+
+    fn add(&mut self, captures: &Captures) {
+        let value = get(captures, "value").to_string();
+        match get(captures, "key") {
+            "new file mode" => (self.added, self.new_mode) = (true, Some(value)),
+            "deleted file mode" => (self.deleted, self.old_mode) = (true, Some(value)),
+            "old mode" => self.old_mode = Some(value),
+            "new mode" => self.new_mode = Some(value),
+            key @ ("rename from" | "copy from") => {
+                self.moved = Some((value, String::new(), key == "copy from"))
+            }
+            "rename to" | "copy to" => {
+                if let Some((_, new, _)) = &mut self.moved {
+                    *new = value;
+                }
+            }
+            _ => {}
+        }
+        let prefix = get(captures, "prefix");
+        let line = get(captures, "line");
+        self.lines
+            .push(format!("{prefix}{LIGHT_GRAY}{line}{RESET}"));
+    }
+
+    /// Formats the `diff --git` line like a color-words header followed by the dimmed extended header lines
+    fn format(&self) -> String {
+        let prefix = &self.prefix;
+        let header = |color: &str, mark: &str, path: &str, suffix: &str| {
+            file_header(prefix, color, mark, &normalize_path(path), suffix)
+        };
+        let (old_path, new_path) = split_git_paths(&self.paths);
+        let mode_suffix = |sign: &str, mode: &Option<String>| match mode.as_deref() {
+            Some("100755") => format!(" {sign}x"),
+            Some("120000") => " ->".to_string(),
+            _ => String::new(),
+        };
+        let mut lines = vec![match (
+            &self.moved,
+            self.old_mode.as_deref(),
+            self.new_mode.as_deref(),
+        ) {
+            (Some((old, new, is_copy)), _, _) => {
+                let (color, mark) = if *is_copy {
+                    (GREEN, "C")
+                } else {
+                    (MAGENTA, "R")
+                };
+                let old = normalize_path(old);
+                header(color, mark, new, &format!(" {LIGHT_GRAY}⇐ {old}"))
+            }
+            _ if self.added => header(GREEN, "A", &new_path, &mode_suffix("+", &self.new_mode)),
+            _ if self.deleted => header(RED, "D", &old_path, &mode_suffix("-", &self.old_mode)),
+            (None, Some("100755"), Some("100644")) => header(BLUE, "x", &new_path, " -x"),
+            (None, Some("100644"), Some("100755")) => header(BLUE, "X", &new_path, " +x"),
+            (None, Some(old), Some(new)) => {
+                header(BLUE, "M", &new_path, &format!(" {LIGHT_GRAY}{old} → {new}"))
+            }
+            _ => header(BLUE, "M", &new_path, ""),
+        }];
+        lines.extend(self.lines.iter().cloned());
+        lines.join("\n")
+    }
+}
+
+/// Splits the paths of a `diff --git a/<old> b/<new>` line, which may contain spaces
+fn split_git_paths(paths: &str) -> (String, String) {
+    // for an unchanged path both halves are equal
+    let mid = paths.len() / 2;
+    if paths.len() % 2 == 1
+        && paths.is_char_boundary(mid)
+        && let (Some(old), Some(new)) = (
+            paths[..mid].strip_prefix("a/"),
+            paths[mid..].strip_prefix(" b/"),
+        )
+        && old == new
+    {
+        return (old.to_string(), new.to_string());
+    }
+    match paths.split_once(" b/") {
+        Some((old, new)) => (old.trim_start_matches("a/").to_string(), new.to_string()),
+        None => (paths.to_string(), paths.to_string()),
+    }
 }
 
 /// Formats a line of `jj status` or `jj diff --summary`
@@ -469,15 +666,40 @@ fn format_status(captures: &Captures) -> String {
         "?" => (MAGENTA, "?"),
         _ => (BLUE, "M"),
     };
+    format_path_line(prefix, color, mark, path, "")
+}
+
+/// Formats a line of `jj diff --types`, e.g. `FL path` (regular file became symlink)
+fn format_types(captures: &Captures) -> String {
+    let prefix = get(captures, "prefix");
+    let path = get(captures, "path");
+    let types = get(captures, "types");
+    let (color, mark) = if expand_braces(path).is_some() {
+        // like in color-words diffs copies and renames look the same
+        (MAGENTA, "R")
+    } else if types.starts_with('-') {
+        (GREEN, "A")
+    } else if types.ends_with('-') {
+        (RED, "D")
+    } else {
+        (BLUE, "M")
+    };
+    format_path_line(prefix, color, mark, path, &format!(" {LIGHT_GRAY}{types}"))
+}
+
+/// Formats `mark path`, a path like `a/{b => c}/x` as `mark a/c/x ⇐ a/b/x`
+fn format_path_line(prefix: &str, color: &str, mark: &str, path: &str, suffix: &str) -> String {
     match expand_braces(path) {
         Some((old_path, new_path)) => {
             let old_path = normalize_path(&old_path);
             let new_path = normalize_path(&new_path);
-            format!("{prefix}{color}{mark} {new_path} {LIGHT_GRAY}⇐ {old_path}{CLEAR_LINE}{RESET}")
+            format!(
+                "{prefix}{color}{mark} {new_path} {LIGHT_GRAY}⇐ {old_path}{suffix}{CLEAR_LINE}{RESET}"
+            )
         }
         None => {
             let path = normalize_path(path);
-            format!("{prefix}{color}{mark} {path}{CLEAR_LINE}{RESET}")
+            format!("{prefix}{color}{mark} {path}{suffix}{CLEAR_LINE}{RESET}")
         }
     }
 }
@@ -495,8 +717,11 @@ fn expand_braces(path: &str) -> Option<(String, String)> {
     Some((join(old), join(new)))
 }
 
-// prefix of lines drawn inside a jj log graph, e.g. `│ ~  `
-const GRAPH: &str = r"(?<prefix>[\s│├─╮╯╭╰┤┬┴┼~|/\\]*)";
+// prefix of lines drawn inside a jj log graph, e.g. `│ ~  `, also with `ui.graph.style = "ascii"`
+const GRAPH: &str = r"(?<prefix>[\s│├─╮╯╭╰┤┬┴┼~|/\\'+-]*)";
+
+// node of a commit in a jj log graph, optionally colored, also with `ui.graph.style = "ascii"`
+const NODE: &str = r"(?:ESC\[1mESC\[38;5;\d+m)?(?<mark>[@◆○◉×ox+])(?:ESC\[0m)?";
 
 const RE_DIFF: &str = r"
 ^GRAPH
@@ -517,6 +742,12 @@ const RE_STATUS: &str = r"
 ESC\[38;5;\d+m(?<status>[MADRC?])\ (?<path>.+?)ESC\[39m$
 ";
 
+// -: absent, F: file, L: symlink, C: conflict, G: Git submodule, T: tree
+const RE_TYPES: &str = r"
+^GRAPH
+ESC\[38;5;\d+m(?<types>[-FLCGT]{2})\ (?<path>.+?)ESC\[39m$
+";
+
 const RE_CONFLICT: &str = r"
 ^GRAPH
 (?<path>\S.*?)\s+
@@ -524,17 +755,46 @@ ESC\[38;5;\d+m(?<description>\d+-sided\ conflict[^ESC]*)ESC\[39m$
 ";
 
 const RE_CHANGE: &str = r"
-^.*(ESC\[1mESC\[38;5;(?<color>\d+)m)?(?<mark>[@◆○×])(ESC\[0m)?\ +
-.*ESC\[1mESC\[38;5;5m(?<change_id>[a-z]+)
+^GRAPH NODE\ +
+.*?ESC\[1mESC\[38;5;5m(?<change_id>[a-z]+)
 (ESC\[0m\ *(?<summary>[^\ ESC](?:[^ESC]*[^\ ESC])?))?
 .*
 ";
 
 const RE_COMMIT_ID: &str = r"
-^.*(?<mark>[@◆○×]).*
-Commit\ ID:
-.*ESC\[38;5;4m(?<commit_id>[a-z0-9]+)ESC\[39m
-.*
+^GRAPH (?:NODE.*?)?
+Commit\ ID:\ ESC\[38;5;4m(?<commit_id>[0-9a-f]+)ESC\[39m$
+";
+
+// the lines of `jj status` about the working copy and its parents
+const RE_WORKING_COPY: &str = r"
+^(?:Working\ copy\s+\(@\)|Parent\ commit\s+\(@-\))\s*:\ 
+";
+
+const RE_COMMITTER: &str = r"^GRAPH Committer:\ ";
+
+// first line of a description in a line of its own, optionally after an `(empty)` label
+const RE_DESCRIPTION: &str = r"
+^GRAPH
+(?:ESC\[1m)?
+(?:ESC\[38;5;\d+m\(empty\)ESC\[39m\ )?
+(?<summary>[^\ ESC](?:[^ESC]*[^\ ESC])?)
+(?:ESC\[0m)?$
+";
+
+const RE_GIT_HEADER: &str = r"
+^GRAPH ESC\[1mdiff\ --git\ (?<paths>.+)ESC\[0m$
+";
+
+const RE_GIT_META: &str = r"
+^GRAPH ESC\[1m
+(?<line>
+  (?<key>new\ file\ mode|deleted\ file\ mode|old\ mode|new\ mode|rename\ from|rename\ to|copy\ from|copy\ to|
+    similarity\ index|dissimilarity\ index|index)\ (?<value>.*)|
+  ---\ .*|
+  \+\+\+\ .*
+)
+ESC\[0m$
 ";
 
 /// Replaces the placeholder `ESC` by the escape character, but not inside words like `DESCRIPTION`
@@ -549,7 +809,11 @@ fn replace_esc(s: &str) -> String {
 /// so literal spaces at the start of a line must be escaped as `\ `
 fn make_re(re: &str) -> Regex {
     let re_nl_space = Regex::new(r"\n\s*").unwrap();
-    let re = re_nl_space.replace_all(re, "").replace("GRAPH", GRAPH);
+    let re = re_nl_space
+        .replace_all(re, "")
+        .replace("GRAPH ", GRAPH)
+        .replace("GRAPH", GRAPH)
+        .replace("NODE", NODE);
     Regex::new(&replace_esc(&re)).unwrap()
 }
 
@@ -576,7 +840,7 @@ mod tests {
 
     fn format_plain(line: &str) -> Option<String> {
         formatter()
-            .format_line(&replace_esc(line))
+            .format_line(&replace_esc(line), &mut State::default())
             .map(|l| plain(&l))
     }
 
@@ -710,7 +974,6 @@ mod tests {
         for line in [
             "plain text",
             "ESC[38;5;3mModified something else:ESC[39m",
-            "ESC[38;5;6mFF {a => b}ESC[39m",
             "Working copy changes:",
         ] {
             assert_eq!(format_plain(line), None, "{line}");
@@ -736,7 +999,9 @@ mod tests {
     fn test_change_summary() {
         let summary = "first commit with a really long summary line that definitely exceeds seventy-two chars";
         let line = replace_esc(&format!("○    7 ESC[1mESC[38;5;5mkmzESC[0m  {summary}"));
-        let formatted = formatter().format_line(&line).unwrap();
+        let formatted = formatter()
+            .format_line(&line, &mut State::default())
+            .unwrap();
         assert_eq!(plain(&formatted), plain(&line));
         // the 51st character starts the warning, the 73rd the error
         let (ok, rest) = summary.split_at(50);
@@ -745,7 +1010,9 @@ mod tests {
 
         // only the summary is highlighted, not the same text in the change id
         let line = replace_esc("@  1 ESC[1mESC[38;5;5mmESC[0m    m");
-        let formatted = Formatter::new(0, 72, false).format_line(&line).unwrap();
+        let formatted = Formatter::new(0, 72, false)
+            .format_line(&line, &mut State::default())
+            .unwrap();
         assert!(formatted.contains("\u{1b}[38;5;5mm\u{1b}[0m"));
         assert!(formatted.contains(&format!("{RESET}{BG_BLUE}    {YELLOW}m")));
     }
@@ -757,11 +1024,194 @@ mod tests {
             "ESC[1mESC[38;5;14m◆ESC[0m  ESC[38;5;2m-ESC[39m ESC[1mESC[38;5;5mzESC[0m    ESC[38;5;2m-ESC[39m",
             "○  4 ESC[1mESC[38;5;5mlESC[0m    summary",
             "│ ESC[1mESC[38;5;1m×ESC[0m  Commit ID: ESC[38;5;4m4ed6adab1aa245ba48d0a3e749621d29cf9445cfESC[39m",
+            "○ │  Commit ID: ESC[38;5;4m61bc85cb795bf16a958a7298df49680638e6c694ESC[39m",
+            // jj show
+            "Commit ID: ESC[38;5;4m0d9666043b916abf64db06d7a1b37726e2e29c7fESC[39m",
+            // ui.graph.style = "ascii"
+            "ESC[1mESC[38;5;1mxESC[0m  ESC[1mESC[38;5;5mxoESC[0mESC[38;5;8mrrrnroESC[39m user 2026-01-01",
+            "| o  ESC[1mESC[38;5;5muESC[0mESC[38;5;8msqlspxoESC[39m user 2026-01-01",
+            // jj status
+            "Working copy  (@) : ESC[1mESC[38;5;13muESC[38;5;8msqlspxoESC[39m (no description set)ESC[0m",
+            "Parent commit (@-): ESC[1mESC[38;5;5mywESC[0mESC[38;5;8mktvznESC[39m mv",
         ] {
             let line = replace_esc(line);
-            let formatted = formatter().format_line(&line).expect(&line);
+            let formatted = formatter()
+                .format_line(&line, &mut State::default())
+                .expect(&line);
             assert!(formatted.starts_with(BG_BLUE), "{line}");
             assert_eq!(plain(&formatted), plain(&line));
+        }
+    }
+
+    /// Formats `input` (with `ESC` placeholders) as a stream and returns the lines with escapes
+    fn format_lines(formatter: &Formatter, input: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        formatter
+            .format_stream(replace_esc(input).as_bytes(), &mut out)
+            .unwrap();
+        String::from_utf8(out)
+            .unwrap()
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+
+    #[test]
+    fn test_description_in_next_line() {
+        let f = Formatter::new(3, 5, false);
+        let highlighted = format!("abc{YELLOW}de{RED}fg{RESET_FG}");
+        // default log template
+        let lines = format_lines(
+            &f,
+            "○  ESC[1mESC[38;5;5mzsESC[0mESC[38;5;8muskulnESC[39m test@example.com\n│  abcdefg\n○  ESC[1mESC[38;5;5mzsESC[0mESC[38;5;8muskulnESC[39m test@example.com\n├─╮  ESC[38;5;2m(empty)ESC[39m abcdefg\n│ abcdefg",
+        );
+        assert_eq!(lines[1], format!("│  {highlighted}"));
+        assert!(lines[3].ends_with(&format!("ESC[39m {highlighted}").replace("ESC", "\u{1b}")));
+        // only the line right after the log line is a description
+        assert_eq!(lines[4], "│ abcdefg");
+
+        // detailed log and jj show
+        let lines = format_lines(
+            &f,
+            "│  Committer: Test User <test@example.com>\n│\n│      abcdefg\n│\n│      abcdefg",
+        );
+        assert_eq!(lines[2], format!("│      {highlighted}"));
+        assert_eq!(lines[4], "│      abcdefg");
+
+        // no description
+        let lines = format_lines(
+            &f,
+            "Committer: x\n\n    ESC[38;5;3m(no description set)ESC[39m",
+        );
+        assert_eq!(
+            lines[2],
+            replace_esc("    ESC[38;5;3m(no description set)ESC[39m")
+        );
+    }
+
+    #[test]
+    fn test_git_headers() {
+        // (graph prefix, header lines which jj prints in bold, expected plain output)
+        let cases: [(&str, &[&str], &[&str]); 9] = [
+            (
+                "",
+                &[
+                    "diff --git a/added.txt b/added.txt",
+                    "new file mode 100644",
+                    "index 0000000000..3e757656cf",
+                    "--- /dev/null",
+                    "+++ b/added.txt",
+                ],
+                &[
+                    "A added.txt",
+                    "new file mode 100644",
+                    "index 0000000000..3e757656cf",
+                    "--- /dev/null",
+                    "+++ b/added.txt",
+                ],
+            ),
+            (
+                "",
+                &["diff --git a/run b/run", "new file mode 100755"],
+                &["A run +x", "new file mode 100755"],
+            ),
+            (
+                "",
+                &["diff --git a/link b/link", "deleted file mode 120000"],
+                &["D link ->", "deleted file mode 120000"],
+            ),
+            (
+                "",
+                &[
+                    "diff --git a/exe.sh b/exe.sh",
+                    "old mode 100755",
+                    "new mode 100644",
+                ],
+                &["x exe.sh -x", "old mode 100755", "new mode 100644"],
+            ),
+            (
+                "",
+                &["diff --git a/l b/l", "old mode 120000", "new mode 100644"],
+                &["M l 120000 → 100644", "old mode 120000", "new mode 100644"],
+            ),
+            (
+                "",
+                &[
+                    "diff --git a/src/a.rs b/lib/a.rs",
+                    "rename from src/a.rs",
+                    "rename to lib/a.rs",
+                ],
+                &[
+                    "R lib/a.rs ⇐ src/a.rs",
+                    "rename from src/a.rs",
+                    "rename to lib/a.rs",
+                ],
+            ),
+            (
+                "",
+                &["diff --git a/k b/k 2", "copy from k", "copy to k 2"],
+                &["C k 2 ⇐ k", "copy from k", "copy to k 2"],
+            ),
+            (
+                "",
+                &["diff --git a/a b/f.txt b/a b/f.txt", "index 1..2 100644"],
+                &["M a b/f.txt", "index 1..2 100644"],
+            ),
+            (
+                "│  ",
+                &["diff --git a/x b/x", "index 1..2 100644"],
+                &["│  M x", "│  index 1..2 100644"],
+            ),
+        ];
+        for (prefix, header, expected) in cases {
+            let input: Vec<_> = header
+                .iter()
+                .map(|l| format!("{prefix}ESC[1m{l}ESC[0m"))
+                .collect();
+            // the header ends at the first line that is no header line, or at the end of the input
+            for end in ["", "\nESC[38;5;6m@@ -1 +1 @@ESC[39m"] {
+                let input = input.join("\n") + end;
+                let lines: Vec<_> = format_lines(&formatter(), &input)
+                    .iter()
+                    .map(|l| plain(l))
+                    .collect();
+                let mut expected = expected.to_vec();
+                if !end.is_empty() {
+                    expected.push("@@ -1 +1 @@");
+                }
+                assert_eq!(lines, expected, "{input}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_split_git_paths() {
+        for (paths, (old, new)) in [
+            ("a/x b/x", ("x", "x")),
+            ("a/a b/f.txt b/a b/f.txt", ("a b/f.txt", "a b/f.txt")),
+            ("a/src/a.rs b/lib/a.rs", ("src/a.rs", "lib/a.rs")),
+        ] {
+            assert_eq!(
+                split_git_paths(paths),
+                (old.to_string(), new.to_string()),
+                "{paths}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_types() {
+        for (line, expected) in [
+            ("ESC[38;5;6m-F added.txtESC[39m", "A added.txt -F"),
+            ("ESC[38;5;6mL- linkESC[39m", "D link L-"),
+            ("ESC[38;5;6mFF keep.txtESC[39m", "M keep.txt FF"),
+            ("ESC[38;5;6mFL exe.shESC[39m", "M exe.sh FL"),
+            (
+                "ESC[38;5;6mFF {src => lib}/a.rsESC[39m",
+                "R lib/a.rs ⇐ src/a.rs FF",
+            ),
+        ] {
+            assert_eq!(format_plain(line).as_deref(), Some(expected), "{line}");
         }
     }
 
